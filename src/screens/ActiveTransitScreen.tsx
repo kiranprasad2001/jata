@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { View, Text, StyleSheet, FlatList, TouchableOpacity, AppState, AppStateStatus, Share, Modal, Platform } from 'react-native';
 import MapView, { Polyline } from 'react-native-maps';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -9,7 +9,7 @@ import { getBoolean, saveToStorage, getString } from '../utils/storage';
 import { RouteStep } from '../services/GoogleDirectionsService';
 import * as Location from 'expo-location';
 import { LOCATION_SETTINGS, calculateDistanceMeters } from '../utils/LocationSettings';
-import { triggerApproachingStopAlert } from '../services/NotificationService';
+import { requestNotificationPermissions, triggerApproachingStopAlert } from '../services/NotificationService';
 
 export default function ActiveTransitScreen() {
     const route = useRoute<ActiveTransitScreenProps['route']>();
@@ -19,6 +19,7 @@ export default function ActiveTransitScreen() {
     const [isAccessibilityMode, setIsAccessibilityMode] = useState(false);
     const [isTracking, setIsTracking] = useState(false);
     const [isMapVisible, setIsMapVisible] = useState(false);
+    const hasAlertedDestination = useRef(false);
 
     useEffect(() => {
         let locationSubscription: Location.LocationSubscription | null = null;
@@ -27,12 +28,13 @@ export default function ActiveTransitScreen() {
             setIsAccessibilityMode(await getBoolean('accessibility_mode') ?? false);
             await saveToStorage('active_route', activeRoute);
 
-            // Request location permissions
+            // Request location and notification permissions
             const { status } = await Location.requestForegroundPermissionsAsync();
             if (status !== 'granted') {
                 console.warn('Permission to access location was denied');
                 return;
             }
+            await requestNotificationPermissions();
 
             // In a full production app we would use startLocationUpdatesAsync for background execution.
             // For Expo Go compatibility and simplicity, we use watchPositionAsync (foreground tracking).
@@ -44,15 +46,28 @@ export default function ActiveTransitScreen() {
                     distanceInterval: LOCATION_SETTINGS.TRACKING_OPTIONS.distanceInterval,
                 },
                 (location) => {
-                    // Check logic against the next stop
-                    // Note: Google Directions API doesn't return stop Lat/Longs reliably in transit mode,
-                    // so in a real app, you would cross-reference `departureStop` with a GTFS db.
-                    // For demonstration, we simply log the tracking heartbeat.
                     console.log(`[JATA] Location update: ${location.coords.latitude}, ${location.coords.longitude}`);
 
-                    // Demo: If we had stop coordinates, we would do:
-                    // const distance = calculateDistanceMeters(location.coords.latitude, location.coords.longitude, stopLat, stopLon);
-                    // if (distance < LOCATION_SETTINGS.TRIGGER_DISTANCE_METERS) { triggerApproachingStopAlert(...); }
+                    // Use the last polyline coordinate as the destination point.
+                    // Google Directions doesn't return individual stop coordinates in transit mode,
+                    // so this alerts the user when they're approaching the final destination.
+                    if (hasAlertedDestination.current || !activeRoute.coordinates?.length) return;
+
+                    const dest = activeRoute.coordinates[activeRoute.coordinates.length - 1];
+                    const distance = calculateDistanceMeters(
+                        location.coords.latitude,
+                        location.coords.longitude,
+                        dest.latitude,
+                        dest.longitude
+                    );
+
+                    if (distance < LOCATION_SETTINGS.TRIGGER_DISTANCE_METERS) {
+                        hasAlertedDestination.current = true;
+                        const lastStep = activeRoute.steps[activeRoute.steps.length - 1];
+                        const destName = lastStep.transitDetails?.arrivalStop
+                            ?? lastStep.htmlInstructions.replace(/<[^>]+>/g, '').replace(/^Walk to\s*/i, '').trim();
+                        triggerApproachingStopAlert(destName, `Your stop is ${Math.round(distance)}m away`);
+                    }
                 }
             );
         };
@@ -227,7 +242,7 @@ export default function ActiveTransitScreen() {
                             {activeRoute.coordinates && activeRoute.coordinates.length > 0 ? (
                                 <Polyline
                                     coordinates={activeRoute.coordinates}
-                                    strokeColor={COLORS.surface} // Blue accent
+                                    strokeColor={COLORS.surface}
                                     strokeWidth={4}
                                 />
                             ) : null}
@@ -248,7 +263,7 @@ const styles = StyleSheet.create({
     stepContainer: { flexDirection: 'row', alignItems: 'flex-start' },
     timelineContainer: { alignItems: 'center', marginRight: SPACING.md, height: '100%' },
     timelineDot: { width: 16, height: 16, borderRadius: 8, borderWidth: 4, backgroundColor: COLORS.background, zIndex: 1 },
-    timelineLine: { width: 2, flex: 1, marginTop: 4, marginBottom: -16 }, // Native overlap hack
+    timelineLine: { width: 2, flex: 1, marginTop: 4, marginBottom: -16 },
     instructionContainer: { flex: 1 },
     badge: { alignSelf: 'flex-start', paddingHorizontal: SPACING.sm, paddingVertical: 4, borderRadius: 4, marginBottom: SPACING.xs },
     badgeText: { color: COLORS.background, fontWeight: 'bold', fontSize: 12 },
