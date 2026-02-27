@@ -1,26 +1,22 @@
 import axios from 'axios';
 import { TransitRoute } from './GoogleDirectionsService';
-import { transit_realtime } from '../proto/gtfs-realtime';
+import Constants from 'expo-constants';
 
-// TTC GTFS-Realtime Feeds (Free/Open without auth)
-const TTC_TRIP_UPDATES_URL = 'https://bustime.ttc.ca/gtfsrt/trips';
-const TTC_VEHICLE_POSITIONS_URL = 'https://bustime.ttc.ca/gtfsrt/vehicles';
+// Relay Server (Dynamically uses dev machine IP for physical device testing)
+const HOST = Constants.expoConfig?.hostUri?.split(':')[0] || 'localhost';
+const RELAY_VEHICLES_URL = `http://${HOST}:3000/api/vehicles`;
 
 export const fetchLiveStatus = async (routes: TransitRoute[]): Promise<TransitRoute[]> => {
-    let vehicles: transit_realtime.IFeedEntity[] = [];
+    let vehicles: any[] = [];
 
     try {
-        // Fetch the raw binary protobuf block
-        const response = await axios.get(TTC_VEHICLE_POSITIONS_URL, {
-            responseType: 'arraybuffer',
-            timeout: 8000
+        // Fetch pre-parsed JSON from our Relay Server
+        const response = await axios.get(RELAY_VEHICLES_URL, {
+            timeout: 5000
         });
-
-        // Use the compiled static module to decode the Uint8Array into a typed FeedMessage
-        const feed = transit_realtime.FeedMessage.decode(new Uint8Array(response.data));
-        vehicles = feed.entity;
+        vehicles = response.data.vehicles || [];
     } catch (error) {
-        console.warn("TTC GTFS-RT is unreachable or decoding failed. Falling back to SCHEDULED times.");
+        console.warn("Relay Server unreachable. Falling back to SCHEDULED times.");
         return routes.map(route => ({ ...route, isLive: false }));
     }
 

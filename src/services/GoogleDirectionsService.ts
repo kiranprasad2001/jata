@@ -1,4 +1,5 @@
 import axios from 'axios';
+import polyline from '@mapbox/polyline';
 
 // In Phase 2, this key should be moved to app.json extra config or a .env file
 // and restricted via Google Cloud Console to the iOS Bundle ID / Android Package Name.
@@ -15,6 +16,7 @@ export interface TransitRoute {
     crowdLevel?: 'Low' | 'Med' | 'High';
     isLive?: boolean;
     etaMins?: number;
+    coordinates?: { latitude: number; longitude: number }[];
 }
 
 export interface RouteStep {
@@ -218,6 +220,16 @@ export const fetchTransitRoutes = async (
                 etaMins = Math.max(0, Math.floor((depTimeMs - Date.now()) / 60000));
             }
 
+            // Decode the overview polyline
+            let coordinates = undefined;
+            if (route.overview_polyline?.points) {
+                const decoded = polyline.decode(route.overview_polyline.points);
+                coordinates = decoded.map((vec: [number, number]) => ({
+                    latitude: vec[0],
+                    longitude: vec[1],
+                }));
+            }
+
             return {
                 totalTimeText: leg.duration.text,
                 totalTimeValue: leg.duration.value,
@@ -225,6 +237,7 @@ export const fetchTransitRoutes = async (
                 fare,
                 steps,
                 etaMins,
+                coordinates,
                 // Mock data for Phase 2 as per spec
                 crowdLevel: ['Low', 'Med', 'High'][Math.floor(Math.random() * 3)] as 'Low' | 'Med' | 'High',
                 isLive: Math.random() > 0.3, // 70% chance of being live

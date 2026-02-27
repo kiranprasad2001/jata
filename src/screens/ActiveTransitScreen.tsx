@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, AppState, AppStateStatus, Share } from 'react-native';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, AppState, AppStateStatus, Share, Modal, Platform } from 'react-native';
+import MapView, { Polyline } from 'react-native-maps';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRoute, useNavigation } from '@react-navigation/native';
 import { ActiveTransitScreenProps } from '../navigation/types';
@@ -17,6 +18,7 @@ export default function ActiveTransitScreen() {
 
     const [isAccessibilityMode, setIsAccessibilityMode] = useState(false);
     const [isTracking, setIsTracking] = useState(false);
+    const [isMapVisible, setIsMapVisible] = useState(false);
 
     useEffect(() => {
         let locationSubscription: Location.LocationSubscription | null = null;
@@ -100,9 +102,9 @@ export default function ActiveTransitScreen() {
                 {/* Timeline Line */}
                 <View style={styles.timelineContainer}>
                     <View style={[styles.timelineDot, { borderColor: accentColor }]} />
-                    {index !== activeRoute.steps.length - 1 && (
+                    {index !== activeRoute.steps.length - 1 ? (
                         <View style={[styles.timelineLine, { backgroundColor: accentColor }]} />
-                    )}
+                    ) : null}
                 </View>
 
                 {/* Instruction Content */}
@@ -122,13 +124,13 @@ export default function ActiveTransitScreen() {
                                 {item.transitDetails?.numStops} stops • {item.durationText}
                             </Text>
                             {/* Mock Entrance integration */}
-                            {item.transitDetails?.departureStop.includes('Station') && (
+                            {item.transitDetails?.departureStop.includes('Station') ? (
                                 <View style={[styles.entranceHint, { marginTop: scaleSpacing(SPACING.sm) }]}>
                                     <Text style={{ fontSize: scaleFont(FONT_SIZES.sm), color: COLORS.surface }}>
                                         💡 Suggested Entrance: Front St W via Path
                                     </Text>
                                 </View>
-                            )}
+                            ) : null}
                         </>
                     ) : (
                         <>
@@ -148,16 +150,27 @@ export default function ActiveTransitScreen() {
     return (
         <SafeAreaView style={[styles.container, isAccessibilityMode && styles.a11yBackground]}>
             {/* Minimalist Header */}
-            <View style={[styles.header, { padding: scaleSpacing(SPACING.md) }]}>
-                <TouchableOpacity onPress={() => navigation.navigate('Home')} accessibilityRole="button">
-                    <Text style={{ fontSize: scaleFont(FONT_SIZES.lg), color: COLORS.textSecondary }}>End Route</Text>
-                </TouchableOpacity>
-                <Text style={[styles.headerTitle, { fontSize: scaleFont(FONT_SIZES.lg) }]}>
-                    In Transit
-                </Text>
-                <TouchableOpacity onPress={handleShareETA} accessibilityRole="button" accessibilityLabel="Share ETA">
-                    <Text style={{ fontSize: scaleFont(FONT_SIZES.lg), color: COLORS.line1, fontWeight: 'bold' }}>Share ETA</Text>
-                </TouchableOpacity>
+            <View style={[styles.header, { padding: scaleSpacing(SPACING.md), flexDirection: 'column' }]}>
+                <View style={{ flexDirection: 'row', width: '100%', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <TouchableOpacity onPress={() => navigation.navigate('Home')} accessibilityRole="button">
+                        <Text style={{ fontSize: scaleFont(FONT_SIZES.lg), color: COLORS.textSecondary }}>End Route</Text>
+                    </TouchableOpacity>
+                    <Text style={[styles.headerTitle, { fontSize: scaleFont(FONT_SIZES.lg) }]}>
+                        In Transit
+                    </Text>
+                    <TouchableOpacity onPress={handleShareETA} accessibilityRole="button" accessibilityLabel="Share ETA">
+                        <Text style={{ fontSize: scaleFont(FONT_SIZES.lg), color: COLORS.line1, fontWeight: 'bold' }}>Share ETA</Text>
+                    </TouchableOpacity>
+                </View>
+
+                {activeRoute.coordinates && activeRoute.coordinates.length > 0 && Platform.OS !== 'web' ? (
+                    <TouchableOpacity
+                        style={{ marginTop: scaleSpacing(SPACING.md), paddingVertical: 8, paddingHorizontal: 16, backgroundColor: '#FAFAFA', borderRadius: 8, borderWidth: 1, borderColor: COLORS.border }}
+                        onPress={() => setIsMapVisible(true)}
+                    >
+                        <Text style={{ fontSize: scaleFont(FONT_SIZES.md), color: COLORS.text, fontWeight: 'bold', textAlign: 'center' }}>🗺️ View Map (Overview)</Text>
+                    </TouchableOpacity>
+                ) : null}
             </View>
 
             {/* Distraction-Free List */}
@@ -182,6 +195,46 @@ export default function ActiveTransitScreen() {
                     </View>
                 )}
             />
+
+            {/* The "Compromise" Map Modal */}
+            {Platform.OS !== 'web' ? (
+                <Modal visible={isMapVisible} animationType="slide" presentationStyle="pageSheet">
+                    <SafeAreaView style={{ flex: 1, backgroundColor: COLORS.background }}>
+                        <View style={[styles.headerModal, { padding: scaleSpacing(SPACING.md) }]}>
+                            <TouchableOpacity onPress={() => setIsMapVisible(false)} accessibilityRole="button">
+                                <Text style={{ fontSize: scaleFont(FONT_SIZES.lg), color: COLORS.textSecondary }}>Close Map</Text>
+                            </TouchableOpacity>
+                            <Text style={[styles.headerTitle, { fontSize: scaleFont(FONT_SIZES.lg) }]}>
+                                Route Overview
+                            </Text>
+                            <View style={{ width: 75 }} />
+                        </View>
+                        <MapView
+                            style={{ flex: 1 }}
+                            mapType="mutedStandard"
+                            showsUserLocation={true}
+                            customMapStyle={[
+                                { featureType: "poi", stylers: [{ visibility: "off" }] },
+                                { featureType: "transit", stylers: [{ visibility: "off" }] }
+                            ]}
+                            initialRegion={activeRoute.coordinates?.length ? {
+                                latitude: activeRoute.coordinates[0].latitude,
+                                longitude: activeRoute.coordinates[0].longitude,
+                                latitudeDelta: 0.05,
+                                longitudeDelta: 0.05,
+                            } : undefined}
+                        >
+                            {activeRoute.coordinates && activeRoute.coordinates.length > 0 ? (
+                                <Polyline
+                                    coordinates={activeRoute.coordinates}
+                                    strokeColor={COLORS.surface} // Blue accent
+                                    strokeWidth={4}
+                                />
+                            ) : null}
+                        </MapView>
+                    </SafeAreaView>
+                </Modal>
+            ) : null}
         </SafeAreaView>
     );
 }
@@ -189,7 +242,8 @@ export default function ActiveTransitScreen() {
 const styles = StyleSheet.create({
     container: { flex: 1, backgroundColor: COLORS.background },
     a11yBackground: { backgroundColor: '#FAFAFA' },
-    header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingBottom: SPACING.md, borderBottomWidth: 1, borderBottomColor: COLORS.border },
+    header: { alignItems: 'center', justifyContent: 'center', paddingBottom: SPACING.md, borderBottomWidth: 1, borderBottomColor: COLORS.border },
+    headerModal: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingBottom: SPACING.md, borderBottomWidth: 1, borderBottomColor: COLORS.border },
     headerTitle: { fontWeight: 'bold', color: COLORS.text },
     stepContainer: { flexDirection: 'row', alignItems: 'flex-start' },
     timelineContainer: { alignItems: 'center', marginRight: SPACING.md, height: '100%' },
