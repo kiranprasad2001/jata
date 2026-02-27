@@ -47,14 +47,16 @@
       ],
       [
         "expo-notifications",
-        {
-          "icon": "./assets/notification-icon.png",
-          "color": "#FFCC00"
-        }
+        {}
       ]
     ],
     "web": {
       "favicon": "./assets/favicon.png"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "aec80efb-b074-4eee-ad78-f910cfe35a13"
+      }
     }
   }
 }
