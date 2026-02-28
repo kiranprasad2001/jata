@@ -9,13 +9,12 @@ import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../navigation/types';
 import * as Location from 'expo-location';
 import axios from 'axios';
+import { ENDPOINTS } from '../config/api';
 import { recordRouteSearch, getFrequentRoutes } from '../utils/routeHistory';
 import { recordCommuteDeparture, getTodaysPatterns, getNextCommute, formatPatternTime, shortDestination, CommutePattern } from '../utils/commutePatterns';
 import { fetchNearbyVehicles, NearbyVehicle } from '../services/NearbyDeparturesService';
 import { findNearestStation, getCurrentHeadway, SubwayLine } from '../data/subwayData';
 import { schedulePredictiveDeparture } from '../services/NotificationService';
-
-const GOOGLE_PLACES_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_KEY || 'PLACEHOLDER_KEY';
 
 interface PlacePrediction {
     place_id: string;
@@ -24,6 +23,7 @@ interface PlacePrediction {
         main_text: string;
         secondary_text: string;
     };
+    coordinates?: { lat: number; lng: number };
 }
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList, 'Home'>;
@@ -52,30 +52,19 @@ export default function HomeScreen() {
             return;
         }
         try {
-            const response = await axios.get(
-                'https://maps.googleapis.com/maps/api/place/autocomplete/json',
-                {
-                    params: {
-                        input: query,
-                        key: GOOGLE_PLACES_API_KEY,
-                        components: 'country:ca',
-                        location: '43.6532,-79.3832',
-                        radius: 50000,
-                        types: 'establishment|geocode',
-                    },
-                }
-            );
-            if (response.data.status === 'OK') {
-                setSuggestions(response.data.predictions.slice(0, 5));
-            } else {
-                console.warn(`[JATA] Places API: ${response.data.status} — ${response.data.error_message || 'No details'}`);
-                setSuggestions([]);
-            }
+            const response = await axios.get(ENDPOINTS.search, {
+                params: {
+                    q: query,
+                    lat: userCoords?.lat || 43.6532,
+                    lon: userCoords?.lon || -79.3832,
+                },
+            });
+            setSuggestions(response.data.predictions?.slice(0, 5) || []);
         } catch (err) {
-            console.warn('[JATA] Places API request failed:', err);
+            console.warn('[JATA] Search API request failed:', err);
             setSuggestions([]);
         }
-    }, []);
+    }, [userCoords]);
 
     const handleQueryChange = (text: string) => {
         setSearchQuery(text);
@@ -89,9 +78,13 @@ export default function HomeScreen() {
         await recordRouteSearch(prediction.description);
         await recordCommuteDeparture(prediction.description);
         const originStr = await getCurrentLocationString();
+        // Use coordinates for more reliable routing when available
+        const dest = prediction.coordinates
+            ? `${prediction.coordinates.lat},${prediction.coordinates.lng}`
+            : prediction.description;
         navigation.navigate('RouteOptions', {
             origin: originStr,
-            destination: prediction.description,
+            destination: dest,
         });
     };
 

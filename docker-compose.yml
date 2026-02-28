@@ -1,0 +1,13 @@
+version: '3.8'
+
+services:
+  # JATA Backend: TTC GTFS-RT relay + transit routing + geocoding gateway
+  jata-backend:
+    build: ./backend
+    ports:
+      - "3000:3000"
+    environment:
+      - PORT=3000
+      - ROUTING_API_URL=${ROUTING_API_URL:-https://api.transitous.org/api}
+      - GEOCODING_API_URL=${GEOCODING_API_URL:-https://photon.komoot.io}
+    restart: unless-stopped
