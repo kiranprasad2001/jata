@@ -143,3 +143,85 @@ export async function dismissTripNotification() {
         console.warn('[JATA] Failed to dismiss trip notification:', e);
     }
 }
+
+/**
+ * Phase 4: Schedule a predictive departure notification.
+ *
+ * Fires a "Leave now to catch..." notification at the predicted commute time.
+ * Uses expo-notifications with a date trigger (not push — 100% local).
+ *
+ * @param destination Short destination name (e.g., "Union Station")
+ * @param departureHour Hour (0-23) when the user usually leaves
+ * @param departureMinute Minute (0-59) when the user usually leaves
+ * @param leadTimeMinutes How many minutes before departure to notify (default: 10)
+ */
+let predictiveNotificationId: string | null = null;
+
+export async function schedulePredictiveDeparture(
+    destination: string,
+    departureHour: number,
+    departureMinute: number,
+    leadTimeMinutes: number = 10,
+) {
+    if (isExpoGoOnAndroid) {
+        console.log(`[JATA - MOCK] Would schedule predictive departure at ${departureHour}:${departureMinute} for ${destination}`);
+        return;
+    }
+
+    try {
+        const Notifications = await import('expo-notifications');
+
+        // Cancel previous predictive notification
+        if (predictiveNotificationId) {
+            try {
+                await Notifications.cancelScheduledNotificationAsync(predictiveNotificationId);
+            } catch { /* ignore if already fired */ }
+        }
+
+        // Calculate trigger time: today at departureHour:departureMinute minus lead time
+        const triggerDate = new Date();
+        triggerDate.setHours(departureHour, departureMinute, 0, 0);
+        triggerDate.setMinutes(triggerDate.getMinutes() - leadTimeMinutes);
+
+        // If trigger time already passed today, skip
+        if (triggerDate.getTime() <= Date.now()) {
+            return;
+        }
+
+        const h = departureHour % 12 || 12;
+        const m = departureMinute.toString().padStart(2, '0');
+        const ampm = departureHour >= 12 ? 'PM' : 'AM';
+        const timeStr = `${h}:${m} ${ampm}`;
+
+        predictiveNotificationId = await Notifications.scheduleNotificationAsync({
+            content: {
+                title: `Time to head to ${destination}`,
+                body: `Leave now to catch your usual ${timeStr} departure`,
+                sound: true,
+                priority: Notifications.AndroidNotificationPriority.HIGH,
+            },
+            trigger: {
+                type: Notifications.SchedulableTriggerInputTypes.DATE,
+                date: triggerDate,
+            },
+        });
+
+        console.log(`[JATA] Scheduled predictive departure for ${triggerDate.toLocaleTimeString()}`);
+    } catch (e) {
+        console.warn('[JATA] Failed to schedule predictive departure:', e);
+    }
+}
+
+/**
+ * Cancel any pending predictive departure notification.
+ */
+export async function cancelPredictiveDeparture() {
+    if (isExpoGoOnAndroid || !predictiveNotificationId) return;
+    try {
+        const Notifications = await import('expo-notifications');
+        await Notifications.cancelScheduledNotificationAsync(predictiveNotificationId);
+        predictiveNotificationId = null;
+    } catch (e) {
+        console.warn('[JATA] Failed to cancel predictive departure:', e);
+    }
+}
