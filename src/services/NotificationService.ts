@@ -96,3 +96,50 @@ export async function triggerApproachingStopAlert(stopName: string, detailText: 
         console.warn('[JATA] Failed to trigger notification:', e);
     }
 }
+
+let tripNotificationId: string | null = null;
+
+/**
+ * Update an ongoing trip notification (lightweight Live Activity).
+ * Posts a silent notification that updates in the notification shade / lock screen.
+ */
+export async function updateTripNotification(stopsLeft: number | null, arrivalTime: string, lineName: string) {
+    if (isExpoGoOnAndroid) return;
+    try {
+        const Notifications = await import('expo-notifications');
+        if (tripNotificationId) {
+            await Notifications.dismissNotificationAsync(tripNotificationId);
+        }
+
+        const body = stopsLeft !== null
+            ? `${stopsLeft} stop${stopsLeft !== 1 ? 's' : ''} left · Arriving ${arrivalTime}`
+            : `On your way · Arriving ${arrivalTime}`;
+
+        tripNotificationId = await Notifications.scheduleNotificationAsync({
+            content: {
+                title: lineName,
+                body,
+                sound: false,
+            },
+            trigger: null,
+        });
+    } catch (e) {
+        console.warn('[JATA] Failed to update trip notification:', e);
+    }
+}
+
+/**
+ * Dismiss the ongoing trip notification when the route ends.
+ */
+export async function dismissTripNotification() {
+    if (isExpoGoOnAndroid) return;
+    try {
+        if (tripNotificationId) {
+            const Notifications = await import('expo-notifications');
+            await Notifications.dismissNotificationAsync(tripNotificationId);
+            tripNotificationId = null;
+        }
+    } catch (e) {
+        console.warn('[JATA] Failed to dismiss trip notification:', e);
+    }
+}

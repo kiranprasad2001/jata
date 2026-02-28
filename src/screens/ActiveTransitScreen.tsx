@@ -12,6 +12,8 @@ import * as Location from 'expo-location';
 import { LOCATION_SETTINGS, calculateDistanceMeters, calculateCardinalDirection } from '../utils/LocationSettings';
 import { requestNotificationPermissions, triggerApproachingStopAlert } from '../services/NotificationService';
 import { TTC_ENTRANCES } from '../data/ttcEntrances';
+import { fetchServiceAlerts, ServiceAlert } from '../services/TtcGtfsService';
+import { updateTripNotification, dismissTripNotification } from '../services/NotificationService';
 
 /** Determine which step index the user is currently on.
  *  Uses departure times from Google transit data — if the current time
@@ -50,6 +52,8 @@ export default function ActiveTransitScreen() {
     const [arrivalTime, setArrivalTime] = useState<string>('');
     const hasAlertedDestination = useRef(false);
     const alertedTransfers = useRef<Set<number>>(new Set());
+    const [stopsRemaining, setStopsRemaining] = useState<number | null>(null);
+    const [serviceAlerts, setServiceAlerts] = useState<ServiceAlert[]>([]);
     const mapRef = useRef<MapView>(null);
 
     // Feature 4: Identify transfer steps (TRANSIT followed eventually by another TRANSIT)
@@ -127,6 +131,22 @@ export default function ActiveTransitScreen() {
                     );
                     setCurrentStepIndex(stepIdx);
 
+                    // Phase 3: Calculate stops remaining for active transit step
+                    const currentStep = routeData.steps[stepIdx];
+                    if (currentStep.travelMode === 'TRANSIT' && currentStep.transitDetails) {
+                        const td = currentStep.transitDetails;
+                        if (td.departureTimeValue && td.arrivalTimeValue && td.numStops) {
+                            const nowSec = Date.now() / 1000;
+                            const totalDuration = td.arrivalTimeValue - td.departureTimeValue;
+                            const elapsed = nowSec - td.departureTimeValue;
+                            const progress = Math.max(0, Math.min(1, elapsed / totalDuration));
+                            const remaining = Math.max(0, td.numStops - Math.floor(progress * td.numStops));
+                            setStopsRemaining(remaining);
+                        }
+                    } else {
+                        setStopsRemaining(null);
+                    }
+
                     // Feature 4: Check transfer alerts (time-based)
                     const now = Date.now() / 1000;
                     for (const idx of transferStepIndices) {
@@ -174,6 +194,37 @@ export default function ActiveTransitScreen() {
             }
         };
     }, [routeData, transferStepIndices]);
+
+    // Phase 3: Poll for service disruption alerts
+    useEffect(() => {
+        const routeIds: string[] = [];
+        for (const step of routeData.steps) {
+            if (step.travelMode === 'TRANSIT' && step.transitDetails) {
+                const match = step.transitDetails.lineName.match(/\d+/);
+                if (match) routeIds.push(match[0]);
+            }
+        }
+
+        const pollAlerts = async () => {
+            const alerts = await fetchServiceAlerts(routeIds);
+            setServiceAlerts(alerts);
+        };
+
+        pollAlerts();
+        const interval = setInterval(pollAlerts, 60000);
+        return () => clearInterval(interval);
+    }, [routeData.steps]);
+
+    // Phase 3: Persistent trip notification (lightweight Live Activity)
+    useEffect(() => {
+        if (!isTracking || !arrivalTime) return;
+        const step = routeData.steps[currentStepIndex];
+        const lineName = step?.transitDetails?.lineName || 'Active Route';
+        updateTripNotification(stopsRemaining, arrivalTime, lineName);
+    }, [stopsRemaining, arrivalTime, isTracking, currentStepIndex]);
+
+    // Dismiss trip notification when leaving screen
+    useEffect(() => () => { dismissTripNotification(); }, []);
 
     const handleShareETA = async () => {
         try {
@@ -284,7 +335,9 @@ export default function ActiveTransitScreen() {
                                 Towards {item.transitDetails?.arrivalStop}
                             </Text>
                             <Text style={[styles.subDetailText, { fontSize: scaleFont(FONT_SIZES.sm) }]}>
-                                {item.transitDetails?.numStops} stops • {item.durationText}
+                                {isCurrent && stopsRemaining !== null
+                                    ? `${stopsRemaining} stop${stopsRemaining !== 1 ? 's' : ''} left`
+                                    : `${item.transitDetails?.numStops} stops • ${item.durationText}`}
                             </Text>
                             {/* Feature 5: Dynamic entrance hints */}
                             {item.transitDetails?.departureStop.includes('Station') ? (() => {
@@ -350,6 +403,14 @@ export default function ActiveTransitScreen() {
                         {routeData.totalTimeText} remaining
                     </Text>
                 </View>
+
+                {serviceAlerts.length > 0 && (
+                    <View style={styles.alertBanner}>
+                        <Text style={styles.alertText}>
+                            ⚠ {serviceAlerts[0].headerText}
+                        </Text>
+                    </View>
+                )}
 
                 {routeData.coordinates && routeData.coordinates.length > 0 && Platform.OS !== 'web' ? (
                     <TouchableOpacity
@@ -487,4 +548,7 @@ const styles = StyleSheet.create({
     timelineDotCurrent: { width: 20, height: 20, borderRadius: 10, borderWidth: 5 },
     youAreHereBadge: { marginBottom: 4 },
     youAreHereText: { fontSize: 10, fontWeight: 'bold', color: COLORS.line1, letterSpacing: 1 },
+    // Disruption alert
+    alertBanner: { backgroundColor: '#FFF3E0', padding: SPACING.sm, borderRadius: 8, marginTop: SPACING.sm, borderLeftWidth: 4, borderLeftColor: '#FF9800' },
+    alertText: { fontSize: FONT_SIZES.sm, color: '#E65100', fontWeight: '600' },
 });
