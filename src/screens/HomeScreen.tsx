@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, KeyboardAvoidingView, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { COLORS, SPACING, FONT_SIZES } from '../constants/theme';
@@ -8,6 +8,18 @@ import { CustomLocation } from './SettingsScreen';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../navigation/types';
 import * as Location from 'expo-location';
+import axios from 'axios';
+
+const GOOGLE_PLACES_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_KEY || 'PLACEHOLDER_KEY';
+
+interface PlacePrediction {
+    place_id: string;
+    description: string;
+    structured_formatting: {
+        main_text: string;
+        secondary_text: string;
+    };
+}
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList, 'Home'>;
 
@@ -18,6 +30,53 @@ export default function HomeScreen() {
     const [workStop, setWorkStop] = useState<string | undefined>(undefined);
     const [customLocations, setCustomLocations] = useState<CustomLocation[]>([]);
     const [isAccessibilityMode, setIsAccessibilityMode] = useState(false);
+    const [suggestions, setSuggestions] = useState<PlacePrediction[]>([]);
+    const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+    const fetchSuggestions = useCallback(async (query: string) => {
+        if (query.length < 2) {
+            setSuggestions([]);
+            return;
+        }
+        try {
+            const response = await axios.get(
+                'https://maps.googleapis.com/maps/api/place/autocomplete/json',
+                {
+                    params: {
+                        input: query,
+                        key: GOOGLE_PLACES_API_KEY,
+                        components: 'country:ca',
+                        location: '43.6532,-79.3832', // Toronto bias
+                        radius: 50000,
+                        types: 'establishment|geocode',
+                    },
+                }
+            );
+            if (response.data.status === 'OK') {
+                setSuggestions(response.data.predictions.slice(0, 5));
+            } else {
+                setSuggestions([]);
+            }
+        } catch {
+            setSuggestions([]);
+        }
+    }, []);
+
+    const handleQueryChange = (text: string) => {
+        setSearchQuery(text);
+        if (debounceTimer.current) clearTimeout(debounceTimer.current);
+        debounceTimer.current = setTimeout(() => fetchSuggestions(text), 300);
+    };
+
+    const handleSelectSuggestion = async (prediction: PlacePrediction) => {
+        setSuggestions([]);
+        setSearchQuery(prediction.structured_formatting.main_text);
+        const originStr = await getCurrentLocationString();
+        navigation.navigate('RouteOptions', {
+            origin: originStr,
+            destination: prediction.description,
+        });
+    };
 
     // Load saved stops and settings on focus
     useEffect(() => {
@@ -111,20 +170,41 @@ export default function HomeScreen() {
                             {
                                 fontSize: scaleFont(FONT_SIZES.xxl),
                                 padding: scaleSpacing(SPACING.md),
-                                marginBottom: scaleSpacing(SPACING.xl),
+                                marginBottom: suggestions.length > 0 ? SPACING.xs : scaleSpacing(SPACING.xl),
                                 borderBottomColor: isAccessibilityMode ? COLORS.text : COLORS.border
                             }
                         ]}
                         placeholder="Where to?"
                         placeholderTextColor={COLORS.textSecondary}
                         value={searchQuery}
-                        onChangeText={setSearchQuery}
+                        onChangeText={handleQueryChange}
                         onSubmitEditing={handleSearch}
                         returnKeyType="search"
                         autoFocus
                         accessibilityLabel="Search destination"
                         accessibilityHint="Enter the address or station you want to go to"
                     />
+
+                    {suggestions.length > 0 && (
+                        <View style={styles.suggestionsContainer}>
+                            {suggestions.map((item) => (
+                                <TouchableOpacity
+                                    key={item.place_id}
+                                    style={styles.suggestionRow}
+                                    onPress={() => handleSelectSuggestion(item)}
+                                    accessibilityRole="button"
+                                    accessibilityLabel={item.description}
+                                >
+                                    <Text style={[styles.suggestionMain, { fontSize: scaleFont(FONT_SIZES.md) }]} numberOfLines={1}>
+                                        {item.structured_formatting.main_text}
+                                    </Text>
+                                    <Text style={[styles.suggestionSecondary, { fontSize: scaleFont(FONT_SIZES.sm) }]} numberOfLines={1}>
+                                        {item.structured_formatting.secondary_text}
+                                    </Text>
+                                </TouchableOpacity>
+                            ))}
+                        </View>
+                    )}
 
                     <View style={[styles.shortcutsContainer, { marginTop: scaleSpacing(SPACING.xl) }]}>
                         <TouchableOpacity
@@ -246,5 +326,27 @@ const styles = StyleSheet.create({
     },
     shortcutSubtitle: {
         color: COLORS.textSecondary,
+    },
+    suggestionsContainer: {
+        backgroundColor: COLORS.background,
+        borderWidth: 1,
+        borderColor: COLORS.border,
+        borderRadius: 12,
+        marginBottom: SPACING.lg,
+        overflow: 'hidden',
+    },
+    suggestionRow: {
+        paddingHorizontal: SPACING.md,
+        paddingVertical: SPACING.sm + 2,
+        borderBottomWidth: 1,
+        borderBottomColor: COLORS.border,
+    },
+    suggestionMain: {
+        fontWeight: '600',
+        color: COLORS.text,
+    },
+    suggestionSecondary: {
+        color: COLORS.textSecondary,
+        marginTop: 2,
     },
 });

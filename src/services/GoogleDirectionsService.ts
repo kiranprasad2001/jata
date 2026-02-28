@@ -23,12 +23,16 @@ export interface RouteStep {
     htmlInstructions: string;
     distanceText: string;
     durationText: string;
+    durationValue: number; // seconds
     travelMode: string; // 'TRANSIT' or 'WALKING'
+    startLocation?: { lat: number; lng: number };
+    endLocation?: { lat: number; lng: number };
     transitDetails?: {
         departureStop: string;
         arrivalStop: string;
         departureTime: string;
         departureTimeValue?: number;
+        arrivalTimeValue?: number;
         lineName: string;
         lineColor?: string;
         vehicleType: string;
@@ -189,6 +193,7 @@ export const fetchTransitRoutes = async (
                         arrivalStop: step.transit_details.arrival_stop.name,
                         departureTime: step.transit_details.departure_time.text,
                         departureTimeValue: step.transit_details.departure_time.value,
+                        arrivalTimeValue: step.transit_details.arrival_time?.value,
                         lineName: step.transit_details.line.name || step.transit_details.line.short_name,
                         lineColor: step.transit_details.line.color,
                         vehicleType: step.transit_details.line.vehicle.type,
@@ -200,7 +205,10 @@ export const fetchTransitRoutes = async (
                     htmlInstructions: step.html_instructions,
                     distanceText: step.distance.text,
                     durationText: step.duration.text,
+                    durationValue: step.duration.value,
                     travelMode: step.travel_mode,
+                    startLocation: step.start_location,
+                    endLocation: step.end_location,
                     transitDetails,
                 };
             });

@@ -11,6 +11,8 @@ export type RootStackParamList = {
     };
     ActiveTransit: {
         route: TransitRoute;
+        origin: string;
+        destination: string;
     };
 };
 
