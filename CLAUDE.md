@@ -28,12 +28,12 @@ SettingsScreen
 | File | Purpose |
 |------|---------|
 | `src/screens/HomeScreen.tsx` | "Where to?" search + Google Places autocomplete + saved shortcuts + nearby vehicles + commute nudge |
-| `src/screens/RouteOptionsScreen.tsx` | Route cards with Live/Scheduled, fare, crowd level |
+| `src/screens/RouteOptionsScreen.tsx` | Route cards with Live/Scheduled badge, fare |
 | `src/screens/ActiveTransitScreen.tsx` | Step-by-step timeline, location tracking, map modal, ETA, disruption rerouting |
 | `src/screens/SettingsScreen.tsx` | Home/Work/Custom locations, accessibility mode |
 | `src/services/GoogleDirectionsService.ts` | Fetches transit routes, decodes polylines |
 | `src/services/TtcGtfsService.ts` | Live vehicle data + service disruption alerts from TTC GTFS relay |
-| `src/services/NearbyDeparturesService.ts` | Fetches nearby vehicles from relay server for "where's my bus?" |
+| `src/services/NearbyDeparturesService.ts` | Nearby vehicles with real GTFS-RT stop predictions for "where's my bus?" |
 | `src/services/NotificationService.ts` | Local notifications, haptic alerts, persistent trip notification, predictive departure |
 | `src/utils/storage.ts` | AsyncStorage wrapper (saveToStorage, getString, getObject, etc.) |
 | `src/utils/LocationSettings.ts` | Proximity detection (Haversine), tracking config |
@@ -63,10 +63,10 @@ SettingsScreen
 - `commute_patterns` — `CommutePattern[]` array (detected recurring commute patterns)
 
 ### Data Interfaces
-- `TransitRoute` — totalTimeText/Value, mode, fare, steps[], coordinates[], crowdLevel, isLive, etaMins
+- `TransitRoute` — totalTimeText/Value, mode, fare, steps[], coordinates[], isLive, etaMins
 - `RouteStep` — htmlInstructions, distanceText, durationText, travelMode (TRANSIT/WALKING), transitDetails?
 - `transitDetails` — departureStop, arrivalStop, departureTime/Value, lineName, lineColor, vehicleType, numStops
-- `NearbyVehicle` — id, routeId, routeName, distanceMeters, estimatedArrivalMins, bearing, speed
+- `NearbyVehicle` — id, routeId, routeName, distanceMeters, estimatedArrivalMins, isRealtime, bearing, speed
 - `CommutePattern` — destination, dayOfWeek, avgHour, avgMinute, occurrences, lastUsed
 - `SubwayLine` — id, name, color, stations[], headways (peak/midday/evening/weekend/lateNight)
 
@@ -75,7 +75,7 @@ SettingsScreen
 ### Done
 - No auth, local-only storage, anonymous GPS
 - "Where to?" one-tap interface with Google Places autocomplete
-- Route options with Live/Scheduled badges, fare, crowd level (mock data)
+- Route options with Live/Scheduled badges, fare
 - Step-by-step timeline with current step tracking ("YOU ARE HERE")
 - Arrival time display ("Arrive by 3:45 PM")
 - Tracking status indicator (green dot + "Tracking Active")
@@ -92,14 +92,10 @@ SettingsScreen
 - Frequent routes — auto-surfaces destinations searched 3+ times as chips
 - Persistent trip notification — silent lock screen updates ("3 stops left · Arriving 3:42 PM")
 - Service disruption alerts — polls real GTFS-RT alerts feed, shows banner when route affected
-- **Nearby "where's my bus" countdown** — shows nearby TTC vehicles with ETA on home screen
+- **Nearby "where's my bus" countdown** — shows nearby TTC vehicles with real GTFS-RT stop predictions (green = realtime, gray ~estimate = distance-based fallback)
 - **Predictive departure notifications** — detects commute patterns, pushes "Leave now" at the right time
 - **Disruption rerouting** — one-tap "Find alternative route" when disruption detected on current route
 - **Offline-first subway mode** — bundled subway data (stations, headways) works underground
-
-### Mock/Partial
-- Crowd levels — UI works, data is randomly generated
-- Nearby vehicles ETA — rough estimate based on distance, not real stop predictions yet
 
 ### Not Implemented
 - In-station navigation (transfer directions)

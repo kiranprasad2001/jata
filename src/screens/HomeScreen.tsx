@@ -338,8 +338,16 @@ export default function HomeScreen() {
                                             {v.routeName}
                                         </Text>
                                     </View>
-                                    <Text style={[styles.nearbyEta, { fontSize: scaleFont(FONT_SIZES.md) }]}>
-                                        {v.estimatedArrivalMins <= 1 ? 'Now' : `${v.estimatedArrivalMins} min`}
+                                    <Text style={[
+                                        styles.nearbyEta,
+                                        { fontSize: scaleFont(FONT_SIZES.md) },
+                                        v.isRealtime ? styles.nearbyEtaRealtime : styles.nearbyEtaEstimate,
+                                    ]}>
+                                        {v.estimatedArrivalMins <= 1
+                                            ? 'Now'
+                                            : v.isRealtime
+                                                ? `${v.estimatedArrivalMins} min`
+                                                : `~${v.estimatedArrivalMins} min`}
                                     </Text>
                                 </View>
                             ))}
@@ -581,7 +589,13 @@ const styles = StyleSheet.create({
     },
     nearbyEta: {
         fontWeight: 'bold',
-        color: COLORS.line2,
+    },
+    nearbyEtaRealtime: {
+        color: COLORS.line2, // Green — real GTFS-RT prediction
+    },
+    nearbyEtaEstimate: {
+        color: COLORS.textSecondary, // Gray — distance-based estimate
+        fontWeight: '500',
     },
     // Phase 4: Commute nudge
     commuteNudge: {

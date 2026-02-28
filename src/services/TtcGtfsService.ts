@@ -56,8 +56,6 @@ export const fetchLiveStatus = async (routes: TransitRoute[]): Promise<TransitRo
         return {
             ...route,
             isLive,
-            // TTC doesn't natively support OccupancyStatus perfectly yet, keeping mock logic here
-            crowdLevel: ['Low', 'Med', 'High'][Math.floor(Math.random() * 3)] as 'Low' | 'Med' | 'High',
         };
     });
 };
