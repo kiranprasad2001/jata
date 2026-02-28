@@ -1,19 +1,20 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, Share, Modal, Platform, Alert } from 'react-native';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, Share, Modal, Platform, Alert, ActivityIndicator } from 'react-native';
 import MapView, { Marker, Polyline } from 'react-native-maps';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRoute, useNavigation } from '@react-navigation/native';
 import { ActiveTransitScreenProps } from '../navigation/types';
 import { COLORS, SPACING, FONT_SIZES } from '../constants/theme';
 import { getBoolean, saveToStorage, getObject } from '../utils/storage';
-import { RouteStep, TransitRoute } from '../services/GoogleDirectionsService';
+import { RouteStep, TransitRoute, fetchTransitRoutes } from '../services/GoogleDirectionsService';
 import { CustomLocation } from './SettingsScreen';
 import * as Location from 'expo-location';
 import { LOCATION_SETTINGS, calculateDistanceMeters, calculateCardinalDirection } from '../utils/LocationSettings';
 import { requestNotificationPermissions, triggerApproachingStopAlert } from '../services/NotificationService';
 import { TTC_ENTRANCES } from '../data/ttcEntrances';
-import { fetchServiceAlerts, ServiceAlert } from '../services/TtcGtfsService';
+import { fetchServiceAlerts, ServiceAlert, fetchLiveStatus } from '../services/TtcGtfsService';
 import { updateTripNotification, dismissTripNotification } from '../services/NotificationService';
+import { findNearestStation, getCurrentHeadway } from '../data/subwayData';
 
 /** Determine which step index the user is currently on.
  *  Uses departure times from Google transit data — if the current time
@@ -54,6 +55,9 @@ export default function ActiveTransitScreen() {
     const alertedTransfers = useRef<Set<number>>(new Set());
     const [stopsRemaining, setStopsRemaining] = useState<number | null>(null);
     const [serviceAlerts, setServiceAlerts] = useState<ServiceAlert[]>([]);
+    const [isRerouting, setIsRerouting] = useState(false);
+    const [hasOfferedReroute, setHasOfferedReroute] = useState(false);
+    const [subwayOfflineInfo, setSubwayOfflineInfo] = useState<string | null>(null);
     const mapRef = useRef<MapView>(null);
 
     // Feature 4: Identify transfer steps (TRANSIT followed eventually by another TRANSIT)
@@ -260,6 +264,59 @@ export default function ActiveTransitScreen() {
         Alert.alert('Saved', 'Return trip added to your home screen shortcuts.');
     };
 
+    // Phase 4: Disruption rerouting — fetch alternative routes when disruption detected
+    const handleReroute = async () => {
+        if (isRerouting) return;
+        setIsRerouting(true);
+        try {
+            const originStr = userLocation
+                ? `${userLocation.latitude},${userLocation.longitude}`
+                : origin;
+            // Navigate to RouteOptions with current location as new origin
+            navigation.navigate('RouteOptions', {
+                origin: originStr,
+                destination,
+            });
+        } catch (e) {
+            console.warn('[JATA] Reroute failed:', e);
+            Alert.alert('Reroute Failed', 'Could not find alternative routes. Please try again.');
+        } finally {
+            setIsRerouting(false);
+        }
+    };
+
+    // Phase 4: When alerts are detected, trigger reroute notification
+    useEffect(() => {
+        if (serviceAlerts.length > 0 && !hasOfferedReroute) {
+            setHasOfferedReroute(true);
+            triggerApproachingStopAlert(
+                'Service Disruption',
+                `${serviceAlerts[0].headerText}. Tap the alert banner to find an alternative route.`
+            );
+        }
+    }, [serviceAlerts, hasOfferedReroute]);
+
+    // Phase 4: Offline subway info — when on a subway step, show frequency from bundled data
+    useEffect(() => {
+        const currentStep = routeData.steps[currentStepIndex];
+        if (currentStep?.travelMode === 'TRANSIT' && currentStep.transitDetails) {
+            const vType = currentStep.transitDetails.vehicleType;
+            if (vType?.includes('SUBWAY')) {
+                const stationName = currentStep.transitDetails.departureStop;
+                // Look up from static subway data
+                const nearest = findNearestStation(43.6532, -79.3832); // Default Toronto coords
+                if (nearest) {
+                    const { minutes, period } = getCurrentHeadway(nearest.line);
+                    if (minutes > 0) {
+                        setSubwayOfflineInfo(`${nearest.line.name}: every ${minutes} min (${period})`);
+                    }
+                }
+            } else {
+                setSubwayOfflineInfo(null);
+            }
+        }
+    }, [currentStepIndex, routeData.steps]);
+
     const scaleFont = (size: number) => isAccessibilityMode ? size * 1.2 : size;
     const scaleSpacing = (size: number) => isAccessibilityMode ? size * 1.5 : size;
 
@@ -405,10 +462,30 @@ export default function ActiveTransitScreen() {
                 </View>
 
                 {serviceAlerts.length > 0 && (
-                    <View style={styles.alertBanner}>
+                    <TouchableOpacity
+                        style={styles.alertBanner}
+                        onPress={handleReroute}
+                        disabled={isRerouting}
+                        accessibilityRole="button"
+                        accessibilityLabel={`Disruption: ${serviceAlerts[0].headerText}. Tap to find alternative route.`}
+                    >
                         <Text style={styles.alertText}>
                             ⚠ {serviceAlerts[0].headerText}
                         </Text>
+                        <View style={styles.rerouteRow}>
+                            {isRerouting ? (
+                                <ActivityIndicator size="small" color="#E65100" />
+                            ) : (
+                                <Text style={styles.rerouteText}>Find alternative route →</Text>
+                            )}
+                        </View>
+                    </TouchableOpacity>
+                )}
+
+                {/* Phase 4: Offline subway info */}
+                {subwayOfflineInfo && (
+                    <View style={styles.subwayOfflineBanner}>
+                        <Text style={styles.subwayOfflineText}>{subwayOfflineInfo}</Text>
                     </View>
                 )}
 
@@ -548,7 +625,12 @@ const styles = StyleSheet.create({
     timelineDotCurrent: { width: 20, height: 20, borderRadius: 10, borderWidth: 5 },
     youAreHereBadge: { marginBottom: 4 },
     youAreHereText: { fontSize: 10, fontWeight: 'bold', color: COLORS.line1, letterSpacing: 1 },
-    // Disruption alert
+    // Disruption alert + reroute
     alertBanner: { backgroundColor: '#FFF3E0', padding: SPACING.sm, borderRadius: 8, marginTop: SPACING.sm, borderLeftWidth: 4, borderLeftColor: '#FF9800' },
     alertText: { fontSize: FONT_SIZES.sm, color: '#E65100', fontWeight: '600' },
+    rerouteRow: { marginTop: SPACING.xs, flexDirection: 'row', alignItems: 'center' },
+    rerouteText: { fontSize: FONT_SIZES.sm, color: '#E65100', fontWeight: 'bold' },
+    // Phase 4: Offline subway info
+    subwayOfflineBanner: { backgroundColor: '#F5F5F5', padding: SPACING.xs, borderRadius: 6, marginTop: SPACING.xs },
+    subwayOfflineText: { fontSize: FONT_SIZES.sm, color: COLORS.textSecondary, textAlign: 'center' },
 });
