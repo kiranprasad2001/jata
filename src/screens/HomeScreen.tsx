@@ -57,9 +57,11 @@ export default function HomeScreen() {
             if (response.data.status === 'OK') {
                 setSuggestions(response.data.predictions.slice(0, 5));
             } else {
+                console.warn(`[JATA] Places API: ${response.data.status} — ${response.data.error_message || 'No details'}`);
                 setSuggestions([]);
             }
-        } catch {
+        } catch (err) {
+            console.warn('[JATA] Places API request failed:', err);
             setSuggestions([]);
         }
     }, []);
