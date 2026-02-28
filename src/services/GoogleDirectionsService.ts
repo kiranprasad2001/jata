@@ -12,8 +12,6 @@ export interface TransitRoute {
     mode: string; // e.g. 'SUBWAY', 'BUS', 'STREETCAR'
     fare?: string;
     steps: RouteStep[];
-    // For Phase 2 Mock
-    crowdLevel?: 'Low' | 'Med' | 'High';
     isLive?: boolean;
     etaMins?: number;
     coordinates?: { latitude: number; longitude: number }[];
@@ -246,9 +244,7 @@ export const fetchTransitRoutes = async (
                 steps,
                 etaMins,
                 coordinates,
-                // Mock data for Phase 2 as per spec
-                crowdLevel: ['Low', 'Med', 'High'][Math.floor(Math.random() * 3)] as 'Low' | 'Med' | 'High',
-                isLive: Math.random() > 0.3, // 70% chance of being live
+                // isLive will be set correctly by TtcGtfsService based on GTFS vehicle presence
             };
         });
 

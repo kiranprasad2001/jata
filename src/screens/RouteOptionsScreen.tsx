@@ -64,7 +64,7 @@ export default function RouteOptionsScreen() {
                     navigation.navigate('ActiveTransit', { route: item, origin, destination });
                 }}
                 accessibilityRole="button"
-                accessibilityLabel={`Take ${item.mode} taking ${item.totalTimeText}. Crowd level ${item.crowdLevel}. ${item.isLive ? 'Live departure' : 'Scheduled'}`}
+                accessibilityLabel={`Take ${item.mode} taking ${item.totalTimeText}. ${item.isLive ? 'Live departure' : 'Scheduled'}`}
             >
                 <View style={styles.cardHeader}>
                     <Text style={[styles.timeText, { fontSize: scaleFont(FONT_SIZES.xl), color: COLORS.text }]}>
@@ -81,7 +81,6 @@ export default function RouteOptionsScreen() {
                 <View style={styles.cardDetails}>
                     <Text style={[styles.detailText, { fontSize: scaleFont(FONT_SIZES.md) }]}>Mode: <Text style={{ fontWeight: 'bold' }}>{item.mode}</Text></Text>
                     {item.fare ? <Text style={[styles.detailText, { fontSize: scaleFont(FONT_SIZES.md) }]}>Fare: {item.fare}</Text> : null}
-                    <Text style={[styles.detailText, { fontSize: scaleFont(FONT_SIZES.md) }]}>Crowd: {item.crowdLevel}</Text>
                 </View>
             </TouchableOpacity>
         );
