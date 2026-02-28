@@ -61,7 +61,7 @@ export default function RouteOptionsScreen() {
             <TouchableOpacity
                 style={[styles.routeCard, { borderColor: accentColor, padding: scaleSpacing(SPACING.md), marginBottom: scaleSpacing(SPACING.md) }]}
                 onPress={() => {
-                    navigation.navigate('ActiveTransit', { route: item });
+                    navigation.navigate('ActiveTransit', { route: item, origin, destination });
                 }}
                 accessibilityRole="button"
                 accessibilityLabel={`Take ${item.mode} taking ${item.totalTimeText}. Crowd level ${item.crowdLevel}. ${item.isLive ? 'Live departure' : 'Scheduled'}`}

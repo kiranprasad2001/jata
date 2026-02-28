@@ -1,34 +1,103 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, AppState, AppStateStatus, Share, Modal, Platform } from 'react-native';
-import MapView, { Polyline } from 'react-native-maps';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, Share, Modal, Platform, Alert } from 'react-native';
+import MapView, { Marker, Polyline } from 'react-native-maps';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRoute, useNavigation } from '@react-navigation/native';
 import { ActiveTransitScreenProps } from '../navigation/types';
 import { COLORS, SPACING, FONT_SIZES } from '../constants/theme';
-import { getBoolean, saveToStorage, getString } from '../utils/storage';
-import { RouteStep } from '../services/GoogleDirectionsService';
+import { getBoolean, saveToStorage, getObject } from '../utils/storage';
+import { RouteStep, TransitRoute } from '../services/GoogleDirectionsService';
+import { CustomLocation } from './SettingsScreen';
 import * as Location from 'expo-location';
-import { LOCATION_SETTINGS, calculateDistanceMeters } from '../utils/LocationSettings';
+import { LOCATION_SETTINGS, calculateDistanceMeters, calculateCardinalDirection } from '../utils/LocationSettings';
 import { requestNotificationPermissions, triggerApproachingStopAlert } from '../services/NotificationService';
+import { TTC_ENTRANCES } from '../data/ttcEntrances';
+
+/** Determine which step index the user is currently on.
+ *  Uses departure times from Google transit data — if the current time
+ *  has passed a transit step's departure time, user is on or past that step. */
+function determineCurrentStep(
+    _userLat: number,
+    _userLon: number,
+    steps: RouteStep[],
+): number {
+    const now = Date.now() / 1000;
+    for (let i = steps.length - 1; i >= 0; i--) {
+        const step = steps[i];
+        if (step.travelMode === 'TRANSIT' && step.transitDetails?.departureTimeValue) {
+            if (now >= step.transitDetails.departureTimeValue) {
+                return i;
+            }
+        }
+    }
+    return 0;
+}
 
 export default function ActiveTransitScreen() {
     const route = useRoute<ActiveTransitScreenProps['route']>();
     const navigation = useNavigation<ActiveTransitScreenProps['navigation']>();
-    const activeRoute = route.params.route;
+    const { origin, destination } = route.params;
+
+    // Feature 1: Offline caching — use route data with cached fallback
+    const [routeData, setRouteData] = useState<TransitRoute>(route.params.route);
+    const [isOffline, setIsOffline] = useState(false);
 
     const [isAccessibilityMode, setIsAccessibilityMode] = useState(false);
     const [isTracking, setIsTracking] = useState(false);
     const [isMapVisible, setIsMapVisible] = useState(false);
+    const [currentStepIndex, setCurrentStepIndex] = useState(0);
+    const [userLocation, setUserLocation] = useState<{ latitude: number; longitude: number } | null>(null);
+    const [arrivalTime, setArrivalTime] = useState<string>('');
     const hasAlertedDestination = useRef(false);
+    const alertedTransfers = useRef<Set<number>>(new Set());
+    const mapRef = useRef<MapView>(null);
+
+    // Feature 4: Identify transfer steps (TRANSIT followed eventually by another TRANSIT)
+    const transferStepIndices = useMemo(() => {
+        const indices: number[] = [];
+        for (let i = 0; i < routeData.steps.length; i++) {
+            const step = routeData.steps[i];
+            if (step.travelMode === 'TRANSIT' && step.transitDetails) {
+                const hasNextTransit = routeData.steps.slice(i + 1).some(s => s.travelMode === 'TRANSIT');
+                if (hasNextTransit) indices.push(i);
+            }
+        }
+        return indices;
+    }, [routeData.steps]);
+
+    // Feature 1: Load cached route on mount as fallback
+    useEffect(() => {
+        const loadCachedIfNeeded = async () => {
+            if (!route.params.route?.steps?.length) {
+                const cached = await getObject<TransitRoute>('active_route');
+                if (cached?.steps?.length) {
+                    setRouteData(cached);
+                    setIsOffline(true);
+                }
+            }
+        };
+        loadCachedIfNeeded();
+    }, []);
+
+    // Compute arrival time on mount
+    useEffect(() => {
+        const arrivalMs = Date.now() + routeData.totalTimeValue * 1000;
+        const arrivalDate = new Date(arrivalMs);
+        const hours = arrivalDate.getHours();
+        const minutes = arrivalDate.getMinutes();
+        const ampm = hours >= 12 ? 'PM' : 'AM';
+        const displayHour = hours % 12 || 12;
+        const displayMin = minutes < 10 ? `0${minutes}` : minutes;
+        setArrivalTime(`${displayHour}:${displayMin} ${ampm}`);
+    }, [routeData.totalTimeValue]);
 
     useEffect(() => {
         let locationSubscription: Location.LocationSubscription | null = null;
 
         const init = async () => {
             setIsAccessibilityMode(await getBoolean('accessibility_mode') ?? false);
-            await saveToStorage('active_route', activeRoute);
+            await saveToStorage('active_route', routeData);
 
-            // Request location and notification permissions
             const { status } = await Location.requestForegroundPermissionsAsync();
             if (status !== 'granted') {
                 console.warn('Permission to access location was denied');
@@ -36,8 +105,6 @@ export default function ActiveTransitScreen() {
             }
             await requestNotificationPermissions();
 
-            // In a full production app we would use startLocationUpdatesAsync for background execution.
-            // For Expo Go compatibility and simplicity, we use watchPositionAsync (foreground tracking).
             setIsTracking(true);
             locationSubscription = await Location.watchPositionAsync(
                 {
@@ -48,12 +115,39 @@ export default function ActiveTransitScreen() {
                 (location) => {
                     console.log(`[JATA] Location update: ${location.coords.latitude}, ${location.coords.longitude}`);
 
-                    // Use the last polyline coordinate as the destination point.
-                    // Google Directions doesn't return individual stop coordinates in transit mode,
-                    // so this alerts the user when they're approaching the final destination.
-                    if (hasAlertedDestination.current || !activeRoute.coordinates?.length) return;
+                    setUserLocation({
+                        latitude: location.coords.latitude,
+                        longitude: location.coords.longitude,
+                    });
 
-                    const dest = activeRoute.coordinates[activeRoute.coordinates.length - 1];
+                    const stepIdx = determineCurrentStep(
+                        location.coords.latitude,
+                        location.coords.longitude,
+                        routeData.steps,
+                    );
+                    setCurrentStepIndex(stepIdx);
+
+                    // Feature 4: Check transfer alerts (time-based)
+                    const now = Date.now() / 1000;
+                    for (const idx of transferStepIndices) {
+                        if (alertedTransfers.current.has(idx)) continue;
+                        const td = routeData.steps[idx].transitDetails;
+                        if (!td?.arrivalTimeValue || !td?.departureTimeValue || !td.numStops || td.numStops <= 2) continue;
+
+                        const totalSeconds = td.arrivalTimeValue - td.departureTimeValue;
+                        const avgStopSeconds = totalSeconds / td.numStops;
+                        const twoStopsBefore = td.arrivalTimeValue - (2 * avgStopSeconds);
+
+                        if (now >= twoStopsBefore && now < td.arrivalTimeValue) {
+                            alertedTransfers.current.add(idx);
+                            triggerApproachingStopAlert(td.arrivalStop, 'Transfer coming up in ~2 stops');
+                        }
+                    }
+
+                    // Destination proximity alert
+                    if (hasAlertedDestination.current || !routeData.coordinates?.length) return;
+
+                    const dest = routeData.coordinates[routeData.coordinates.length - 1];
                     const distance = calculateDistanceMeters(
                         location.coords.latitude,
                         location.coords.longitude,
@@ -63,7 +157,7 @@ export default function ActiveTransitScreen() {
 
                     if (distance < LOCATION_SETTINGS.TRIGGER_DISTANCE_METERS) {
                         hasAlertedDestination.current = true;
-                        const lastStep = activeRoute.steps[activeRoute.steps.length - 1];
+                        const lastStep = routeData.steps[routeData.steps.length - 1];
                         const destName = lastStep.transitDetails?.arrivalStop
                             ?? lastStep.htmlInstructions.replace(/<[^>]+>/g, '').replace(/^Walk to\s*/i, '').trim();
                         triggerApproachingStopAlert(destName, `Your stop is ${Math.round(distance)}m away`);
@@ -79,31 +173,65 @@ export default function ActiveTransitScreen() {
                 locationSubscription.remove();
             }
         };
-    }, []);
+    }, [routeData, transferStepIndices]);
 
     const handleShareETA = async () => {
         try {
-            // Extract a cleaner destination string (e.g., "Walk to Union Station" -> "Union Station")
-            const rawDestination = activeRoute.steps[activeRoute.steps.length - 1].htmlInstructions.replace(/<[^>]+>/g, '');
+            const rawDestination = routeData.steps[routeData.steps.length - 1].htmlInstructions.replace(/<[^>]+>/g, '');
             const cleanDestination = rawDestination.replace(/^Walk to\s*/i, '').trim();
 
             await Share.share({
-                message: `I'm currently on the TTC to ${cleanDestination}. I should be there in about ${activeRoute.totalTimeText}.`,
+                message: `I'm currently on the TTC to ${cleanDestination}. I should arrive around ${arrivalTime} (about ${routeData.totalTimeText}).`,
             });
         } catch (error: any) {
             console.error('Error sharing ETA:', error.message);
         }
     };
 
+    // Feature 3: Save return trip as a shortcut
     const handleSaveReturnTrip = async () => {
-        alert("Return trip saved to shortcuts! (Demo Feature)");
+        if (!origin) {
+            Alert.alert('Unavailable', 'Could not determine your starting location.');
+            return;
+        }
+        const existing = (await getObject<CustomLocation[]>('custom_locations')) || [];
+        if (existing.some(loc => loc.stop === origin)) {
+            Alert.alert('Already Saved', 'This return destination is already in your shortcuts.');
+            return;
+        }
+
+        const label = origin.includes(',') && !isNaN(Number(origin.split(',')[0]))
+            ? 'Start Point'
+            : origin.split(',')[0].trim();
+
+        const updated = [...existing, { id: Date.now().toString(), label: `Return: ${label}`, stop: origin }];
+        await saveToStorage('custom_locations', updated);
+        Alert.alert('Saved', 'Return trip added to your home screen shortcuts.');
     };
 
     const scaleFont = (size: number) => isAccessibilityMode ? size * 1.2 : size;
     const scaleSpacing = (size: number) => isAccessibilityMode ? size * 1.5 : size;
 
+    // Feature 5: Get entrance hint from walking step or lookup table
+    const getEntranceHint = (stationName: string, stepIndex: number): string | null => {
+        // Try parsing the preceding walking step
+        if (stepIndex > 0) {
+            const prevStep = routeData.steps[stepIndex - 1];
+            if (prevStep.travelMode === 'WALKING') {
+                const clean = prevStep.htmlInstructions.replace(/<[^>]+>/g, '');
+                const match = clean.match(/Walk to (.+)/i);
+                if (match) return `via ${match[1]}`;
+            }
+        }
+        // Fallback to static lookup
+        const normalized = stationName.replace(/\s*Station\s*$/i, '') + ' Station';
+        return TTC_ENTRANCES[normalized] ? `via ${TTC_ENTRANCES[normalized]}` : null;
+    };
+
     const renderStep = ({ item, index }: { item: RouteStep, index: number }) => {
         const isTransit = item.travelMode === 'TRANSIT' && item.transitDetails;
+        const isCurrent = index === currentStepIndex;
+        const isCompleted = index < currentStepIndex;
 
         let accentColor = COLORS.border;
         if (isTransit) {
@@ -112,47 +240,73 @@ export default function ActiveTransitScreen() {
             if (item.transitDetails?.lineColor) accentColor = item.transitDetails.lineColor;
         }
 
+        const dotStyle = isCurrent
+            ? [styles.timelineDot, styles.timelineDotCurrent, { borderColor: accentColor, backgroundColor: accentColor }]
+            : isCompleted
+                ? [styles.timelineDot, { borderColor: COLORS.textSecondary, backgroundColor: COLORS.textSecondary }]
+                : [styles.timelineDot, { borderColor: accentColor }];
+
+        const lineColor = isCompleted ? COLORS.textSecondary : accentColor;
+
+        // Feature 2: Compute walking direction
+        const walkDirection = (!isTransit && item.startLocation && item.endLocation && item.durationValue > 60)
+            ? calculateCardinalDirection(item.startLocation.lat, item.startLocation.lng, item.endLocation.lat, item.endLocation.lng)
+            : null;
+
         return (
-            <View style={[styles.stepContainer, { paddingVertical: scaleSpacing(SPACING.md) }]}>
-                {/* Timeline Line */}
+            <View style={[
+                styles.stepContainer,
+                { paddingVertical: scaleSpacing(SPACING.md) },
+                isCurrent && styles.currentStepHighlight,
+            ]}>
                 <View style={styles.timelineContainer}>
-                    <View style={[styles.timelineDot, { borderColor: accentColor }]} />
-                    {index !== activeRoute.steps.length - 1 ? (
-                        <View style={[styles.timelineLine, { backgroundColor: accentColor }]} />
+                    <View style={dotStyle} />
+                    {index !== routeData.steps.length - 1 ? (
+                        <View style={[styles.timelineLine, { backgroundColor: lineColor }]} />
                     ) : null}
                 </View>
 
-                {/* Instruction Content */}
                 <View style={styles.instructionContainer}>
+                    {isCurrent && (
+                        <View style={styles.youAreHereBadge}>
+                            <Text style={styles.youAreHereText}>YOU ARE HERE</Text>
+                        </View>
+                    )}
                     {isTransit ? (
                         <>
                             <View style={[styles.badge, { backgroundColor: accentColor }]}>
                                 <Text style={styles.badgeText}>{item.transitDetails?.lineName}</Text>
                             </View>
-                            <Text style={[styles.instructionTitle, { fontSize: scaleFont(FONT_SIZES.lg) }]}>
+                            <Text style={[styles.instructionTitle, { fontSize: scaleFont(FONT_SIZES.lg), opacity: isCompleted ? 0.5 : 1 }]}>
                                 Board at {item.transitDetails?.departureStop}
                             </Text>
-                            <Text style={[styles.detailText, { fontSize: scaleFont(FONT_SIZES.md) }]}>
+                            <Text style={[styles.detailText, { fontSize: scaleFont(FONT_SIZES.md), opacity: isCompleted ? 0.5 : 1 }]}>
                                 Towards {item.transitDetails?.arrivalStop}
                             </Text>
                             <Text style={[styles.subDetailText, { fontSize: scaleFont(FONT_SIZES.sm) }]}>
                                 {item.transitDetails?.numStops} stops • {item.durationText}
                             </Text>
-                            {/* Mock Entrance integration */}
-                            {item.transitDetails?.departureStop.includes('Station') ? (
-                                <View style={[styles.entranceHint, { marginTop: scaleSpacing(SPACING.sm) }]}>
-                                    <Text style={{ fontSize: scaleFont(FONT_SIZES.sm), color: COLORS.surface }}>
-                                        💡 Suggested Entrance: Front St W via Path
-                                    </Text>
-                                </View>
-                            ) : null}
+                            {/* Feature 5: Dynamic entrance hints */}
+                            {item.transitDetails?.departureStop.includes('Station') ? (() => {
+                                const hint = getEntranceHint(item.transitDetails!.departureStop, index);
+                                return hint ? (
+                                    <View style={[styles.entranceHint, { marginTop: scaleSpacing(SPACING.sm) }]}>
+                                        <Text style={{ fontSize: scaleFont(FONT_SIZES.sm), color: COLORS.surface }}>
+                                            Entrance: {hint}
+                                        </Text>
+                                    </View>
+                                ) : null;
+                            })() : null}
                         </>
                     ) : (
                         <>
-                            <Text style={[styles.instructionTitle, { fontSize: scaleFont(FONT_SIZES.lg) }]}>
-                                {item.htmlInstructions.replace(/<[^>]+>/g, '')} {/* Strip HTML from Google */}
+                            {/* Feature 2: Directional walking instructions */}
+                            <Text style={[styles.instructionTitle, { fontSize: scaleFont(FONT_SIZES.lg), opacity: isCompleted ? 0.5 : 1 }]}>
+                                {walkDirection
+                                    ? `Walk ${walkDirection} to ${item.htmlInstructions.replace(/<[^>]+>/g, '').replace(/^Walk to\s*/i, '').trim()}`
+                                    : item.htmlInstructions.replace(/<[^>]+>/g, '')}
                             </Text>
-                            <Text style={[styles.detailText, { fontSize: scaleFont(FONT_SIZES.md) }]}>
+                            <Text style={[styles.detailText, { fontSize: scaleFont(FONT_SIZES.md), opacity: isCompleted ? 0.5 : 1 }]}>
                                 {item.distanceText} • {item.durationText}
                             </Text>
                         </>
@@ -164,33 +318,52 @@ export default function ActiveTransitScreen() {
 
     return (
         <SafeAreaView style={[styles.container, isAccessibilityMode && styles.a11yBackground]}>
-            {/* Minimalist Header */}
+            {/* Header with tracking status */}
             <View style={[styles.header, { padding: scaleSpacing(SPACING.md), flexDirection: 'column' }]}>
                 <View style={{ flexDirection: 'row', width: '100%', justifyContent: 'space-between', alignItems: 'center' }}>
                     <TouchableOpacity onPress={() => navigation.navigate('Home')} accessibilityRole="button">
                         <Text style={{ fontSize: scaleFont(FONT_SIZES.lg), color: COLORS.textSecondary }}>End Route</Text>
                     </TouchableOpacity>
-                    <Text style={[styles.headerTitle, { fontSize: scaleFont(FONT_SIZES.lg) }]}>
-                        In Transit
-                    </Text>
+                    <View style={{ alignItems: 'center' }}>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                            {isTracking && <View style={styles.trackingDot} />}
+                            <Text style={[styles.headerTitle, { fontSize: scaleFont(FONT_SIZES.lg) }]}>
+                                {isTracking ? 'Tracking Active' : 'Starting...'}
+                            </Text>
+                            {isOffline && <Text style={{ fontSize: 10, color: COLORS.textSecondary }}>Cached Route</Text>}
+                        </View>
+                    </View>
                     <TouchableOpacity onPress={handleShareETA} accessibilityRole="button" accessibilityLabel="Share ETA">
-                        <Text style={{ fontSize: scaleFont(FONT_SIZES.lg), color: COLORS.line1, fontWeight: 'bold' }}>Share ETA</Text>
+                        <Text style={{ fontSize: scaleFont(FONT_SIZES.lg), color: COLORS.line1, fontWeight: 'bold' }}>Share</Text>
                     </TouchableOpacity>
                 </View>
 
-                {activeRoute.coordinates && activeRoute.coordinates.length > 0 && Platform.OS !== 'web' ? (
+                {/* Arrival time banner */}
+                <View style={styles.arrivalBanner}>
+                    <Text style={[styles.arrivalLabel, { fontSize: scaleFont(FONT_SIZES.sm) }]}>
+                        Arrive by
+                    </Text>
+                    <Text style={[styles.arrivalTime, { fontSize: scaleFont(FONT_SIZES.xl) }]}>
+                        {arrivalTime}
+                    </Text>
+                    <Text style={[styles.arrivalDuration, { fontSize: scaleFont(FONT_SIZES.sm) }]}>
+                        {routeData.totalTimeText} remaining
+                    </Text>
+                </View>
+
+                {routeData.coordinates && routeData.coordinates.length > 0 && Platform.OS !== 'web' ? (
                     <TouchableOpacity
-                        style={{ marginTop: scaleSpacing(SPACING.md), paddingVertical: 8, paddingHorizontal: 16, backgroundColor: '#FAFAFA', borderRadius: 8, borderWidth: 1, borderColor: COLORS.border }}
+                        style={{ marginTop: scaleSpacing(SPACING.sm), paddingVertical: 8, paddingHorizontal: 16, backgroundColor: '#FAFAFA', borderRadius: 8, borderWidth: 1, borderColor: COLORS.border }}
                         onPress={() => setIsMapVisible(true)}
                     >
-                        <Text style={{ fontSize: scaleFont(FONT_SIZES.md), color: COLORS.text, fontWeight: 'bold', textAlign: 'center' }}>🗺️ View Map (Overview)</Text>
+                        <Text style={{ fontSize: scaleFont(FONT_SIZES.md), color: COLORS.text, fontWeight: 'bold', textAlign: 'center' }}>View Map</Text>
                     </TouchableOpacity>
                 ) : null}
             </View>
 
             {/* Distraction-Free List */}
             <FlatList
-                data={activeRoute.steps}
+                data={routeData.steps}
                 keyExtractor={(_, index) => index.toString()}
                 renderItem={renderStep}
                 contentContainerStyle={{ padding: scaleSpacing(SPACING.lg), paddingBottom: scaleSpacing(SPACING.xxl * 2) }}
@@ -211,40 +384,69 @@ export default function ActiveTransitScreen() {
                 )}
             />
 
-            {/* The "Compromise" Map Modal */}
+            {/* Map Modal — centered on user, showing full route */}
             {Platform.OS !== 'web' ? (
                 <Modal visible={isMapVisible} animationType="slide" presentationStyle="pageSheet">
                     <SafeAreaView style={{ flex: 1, backgroundColor: COLORS.background }}>
                         <View style={[styles.headerModal, { padding: scaleSpacing(SPACING.md) }]}>
                             <TouchableOpacity onPress={() => setIsMapVisible(false)} accessibilityRole="button">
-                                <Text style={{ fontSize: scaleFont(FONT_SIZES.lg), color: COLORS.textSecondary }}>Close Map</Text>
+                                <Text style={{ fontSize: scaleFont(FONT_SIZES.lg), color: COLORS.textSecondary }}>Close</Text>
                             </TouchableOpacity>
                             <Text style={[styles.headerTitle, { fontSize: scaleFont(FONT_SIZES.lg) }]}>
-                                Route Overview
+                                Your Route
                             </Text>
-                            <View style={{ width: 75 }} />
+                            <View style={{ width: 50 }} />
                         </View>
                         <MapView
+                            ref={mapRef}
                             style={{ flex: 1 }}
                             mapType="mutedStandard"
                             showsUserLocation={true}
+                            followsUserLocation={true}
+                            showsMyLocationButton={true}
                             customMapStyle={[
                                 { featureType: "poi", stylers: [{ visibility: "off" }] },
                                 { featureType: "transit", stylers: [{ visibility: "off" }] }
                             ]}
-                            initialRegion={activeRoute.coordinates?.length ? {
-                                latitude: activeRoute.coordinates[0].latitude,
-                                longitude: activeRoute.coordinates[0].longitude,
+                            initialRegion={userLocation ? {
+                                latitude: userLocation.latitude,
+                                longitude: userLocation.longitude,
+                                latitudeDelta: 0.02,
+                                longitudeDelta: 0.02,
+                            } : routeData.coordinates?.length ? {
+                                latitude: routeData.coordinates[0].latitude,
+                                longitude: routeData.coordinates[0].longitude,
                                 latitudeDelta: 0.05,
                                 longitudeDelta: 0.05,
                             } : undefined}
+                            onMapReady={() => {
+                                // Fit map to show both user and entire route
+                                if (routeData.coordinates && routeData.coordinates.length > 0) {
+                                    const allCoords = [...routeData.coordinates];
+                                    if (userLocation) {
+                                        allCoords.push(userLocation);
+                                    }
+                                    mapRef.current?.fitToCoordinates(allCoords, {
+                                        edgePadding: { top: 60, right: 60, bottom: 60, left: 60 },
+                                        animated: true,
+                                    });
+                                }
+                            }}
                         >
-                            {activeRoute.coordinates && activeRoute.coordinates.length > 0 ? (
-                                <Polyline
-                                    coordinates={activeRoute.coordinates}
-                                    strokeColor={COLORS.surface}
-                                    strokeWidth={4}
-                                />
+                            {routeData.coordinates && routeData.coordinates.length > 0 ? (
+                                <>
+                                    <Polyline
+                                        coordinates={routeData.coordinates}
+                                        strokeColor={COLORS.surface}
+                                        strokeWidth={4}
+                                    />
+                                    {/* Destination marker */}
+                                    <Marker
+                                        coordinate={routeData.coordinates[routeData.coordinates.length - 1]}
+                                        title="Destination"
+                                        pinColor={COLORS.surface}
+                                    />
+                                </>
                             ) : null}
                         </MapView>
                     </SafeAreaView>
@@ -272,5 +474,17 @@ const styles = StyleSheet.create({
     subDetailText: { color: COLORS.textSecondary, fontStyle: 'italic' },
     entranceHint: { backgroundColor: '#E1F5FE', padding: SPACING.sm, borderRadius: 8, borderLeftWidth: 4, borderLeftColor: COLORS.surface },
     footerContainer: { alignItems: 'center', paddingVertical: SPACING.lg },
-    returnTripBtn: { backgroundColor: COLORS.text, paddingHorizontal: SPACING.lg, paddingVertical: SPACING.md, borderRadius: 12 }
+    returnTripBtn: { backgroundColor: COLORS.text, paddingHorizontal: SPACING.lg, paddingVertical: SPACING.md, borderRadius: 12 },
+    // Tracking status
+    trackingDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: COLORS.line2 },
+    // Arrival time
+    arrivalBanner: { alignItems: 'center', marginTop: SPACING.sm, paddingVertical: SPACING.xs },
+    arrivalLabel: { color: COLORS.textSecondary },
+    arrivalTime: { fontWeight: 'bold', color: COLORS.text },
+    arrivalDuration: { color: COLORS.textSecondary, marginTop: 2 },
+    // Current step
+    currentStepHighlight: { backgroundColor: '#FFFDF0', borderRadius: 8, marginHorizontal: -SPACING.xs, paddingHorizontal: SPACING.xs },
+    timelineDotCurrent: { width: 20, height: 20, borderRadius: 10, borderWidth: 5 },
+    youAreHereBadge: { marginBottom: 4 },
+    youAreHereText: { fontSize: 10, fontWeight: 'bold', color: COLORS.line1, letterSpacing: 1 },
 });

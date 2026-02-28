@@ -42,3 +42,17 @@ export const calculateDistanceMeters = (lat1: number, lon1: number, lat2: number
 
     return R * c;
 };
+
+/** Calculate cardinal direction (N/NE/E/SE/S/SW/W/NW) from point A to point B. */
+export const calculateCardinalDirection = (lat1: number, lon1: number, lat2: number, lon2: number): string => {
+    const rad = Math.PI / 180;
+    const dLon = (lon2 - lon1) * rad;
+    const y = Math.sin(dLon) * Math.cos(lat2 * rad);
+    const x = Math.cos(lat1 * rad) * Math.sin(lat2 * rad) -
+              Math.sin(lat1 * rad) * Math.cos(lat2 * rad) * Math.cos(dLon);
+    let bearing = Math.atan2(y, x) * (180 / Math.PI);
+    bearing = (bearing + 360) % 360;
+
+    const directions = ['North', 'Northeast', 'East', 'Southeast', 'South', 'Southwest', 'West', 'Northwest'];
+    return directions[Math.round(bearing / 45) % 8];
+};
