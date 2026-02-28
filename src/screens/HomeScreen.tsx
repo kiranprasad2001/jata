@@ -9,6 +9,7 @@ import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../navigation/types';
 import * as Location from 'expo-location';
 import axios from 'axios';
+import { recordRouteSearch, getFrequentRoutes } from '../utils/routeHistory';
 
 const GOOGLE_PLACES_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_KEY || 'PLACEHOLDER_KEY';
 
@@ -32,6 +33,7 @@ export default function HomeScreen() {
     const [isAccessibilityMode, setIsAccessibilityMode] = useState(false);
     const [suggestions, setSuggestions] = useState<PlacePrediction[]>([]);
     const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const [frequentRoutes, setFrequentRoutes] = useState<{ destination: string; count: number }[]>([]);
 
     const fetchSuggestions = useCallback(async (query: string) => {
         if (query.length < 2) {
@@ -71,6 +73,7 @@ export default function HomeScreen() {
     const handleSelectSuggestion = async (prediction: PlacePrediction) => {
         setSuggestions([]);
         setSearchQuery(prediction.structured_formatting.main_text);
+        await recordRouteSearch(prediction.description);
         const originStr = await getCurrentLocationString();
         navigation.navigate('RouteOptions', {
             origin: originStr,
@@ -85,6 +88,7 @@ export default function HomeScreen() {
             setWorkStop(await getString('work_stop'));
             setCustomLocations((await getObject<CustomLocation[]>('custom_locations')) || []);
             setIsAccessibilityMode((await getBoolean('accessibility_mode')) ?? false);
+            setFrequentRoutes(await getFrequentRoutes());
         };
 
         const unsubscribe = navigation.addListener('focus', () => {
@@ -119,6 +123,7 @@ export default function HomeScreen() {
 
     const handleSearch = async () => {
         if (searchQuery.trim()) {
+            await recordRouteSearch(searchQuery.trim());
             const originStr = await getCurrentLocationString();
             navigation.navigate('RouteOptions', {
                 origin: originStr,
@@ -203,6 +208,30 @@ export default function HomeScreen() {
                                     </Text>
                                 </TouchableOpacity>
                             ))}
+                        </View>
+                    )}
+
+                    {frequentRoutes.length > 0 && suggestions.length === 0 && searchQuery.length === 0 && (
+                        <View style={styles.frequentContainer}>
+                            <Text style={[styles.frequentLabel, { fontSize: scaleFont(FONT_SIZES.sm) }]}>Frequent</Text>
+                            <View style={styles.frequentChips}>
+                                {frequentRoutes.map((fr, idx) => {
+                                    const shortName = fr.destination.split(',')[0].trim();
+                                    return (
+                                        <TouchableOpacity
+                                            key={idx}
+                                            style={styles.frequentChip}
+                                            onPress={() => handleShortcut('custom', fr.destination)}
+                                            accessibilityRole="button"
+                                            accessibilityLabel={`Go to ${shortName}`}
+                                        >
+                                            <Text style={[styles.frequentChipText, { fontSize: scaleFont(FONT_SIZES.sm) }]} numberOfLines={1}>
+                                                {shortName}
+                                            </Text>
+                                        </TouchableOpacity>
+                                    );
+                                })}
+                            </View>
                         </View>
                     )}
 
@@ -348,5 +377,29 @@ const styles = StyleSheet.create({
     suggestionSecondary: {
         color: COLORS.textSecondary,
         marginTop: 2,
+    },
+    frequentContainer: {
+        marginBottom: SPACING.md,
+    },
+    frequentLabel: {
+        color: COLORS.textSecondary,
+        marginBottom: SPACING.xs,
+    },
+    frequentChips: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        gap: SPACING.sm,
+    },
+    frequentChip: {
+        paddingHorizontal: SPACING.md,
+        paddingVertical: SPACING.sm,
+        borderRadius: 20,
+        borderWidth: 1,
+        borderColor: COLORS.border,
+        backgroundColor: '#FAFAFA',
+    },
+    frequentChipText: {
+        color: COLORS.text,
+        fontWeight: '500',
     },
 });

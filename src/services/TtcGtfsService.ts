@@ -61,3 +61,25 @@ export const fetchLiveStatus = async (routes: TransitRoute[]): Promise<TransitRo
         };
     });
 };
+
+export interface ServiceAlert {
+    id: string;
+    headerText: string;
+    descriptionText: string;
+    affectedRouteIds: string[];
+}
+
+const RELAY_ALERTS_URL = `http://${HOST}:3000/api/alerts`;
+
+export const fetchServiceAlerts = async (routeIds: string[]): Promise<ServiceAlert[]> => {
+    try {
+        const response = await axios.get(RELAY_ALERTS_URL, { timeout: 5000 });
+        const alerts: ServiceAlert[] = response.data.alerts || [];
+        if (routeIds.length === 0) return alerts;
+        return alerts.filter(alert =>
+            alert.affectedRouteIds.some(id => routeIds.includes(id))
+        );
+    } catch {
+        return [];
+    }
+};

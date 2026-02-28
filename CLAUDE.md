@@ -32,10 +32,11 @@ SettingsScreen
 | `src/screens/ActiveTransitScreen.tsx` | Step-by-step timeline, location tracking, map modal, ETA |
 | `src/screens/SettingsScreen.tsx` | Home/Work/Custom locations, accessibility mode |
 | `src/services/GoogleDirectionsService.ts` | Fetches transit routes, decodes polylines |
-| `src/services/TtcGtfsService.ts` | Live vehicle data from TTC GTFS relay |
-| `src/services/NotificationService.ts` | Local notifications + haptic alerts |
+| `src/services/TtcGtfsService.ts` | Live vehicle data + service disruption alerts from TTC GTFS relay |
+| `src/services/NotificationService.ts` | Local notifications, haptic alerts, persistent trip notification |
 | `src/utils/storage.ts` | AsyncStorage wrapper (saveToStorage, getString, getObject, etc.) |
 | `src/utils/LocationSettings.ts` | Proximity detection (Haversine), tracking config |
+| `src/utils/routeHistory.ts` | Frequent route detection (record searches, surface after 3+ uses) |
 | `src/constants/theme.ts` | TTC colors: Yellow (#FFCC00), Green (#00A54F), Red (#DA291C) |
 | `src/navigation/types.ts` | RootStackParamList type definitions |
 
@@ -44,6 +45,7 @@ SettingsScreen
 - `custom_locations` — `CustomLocation[]` array (`{id, label, stop}`)
 - `accessibility_mode` — boolean (font/spacing scaling)
 - `active_route` — cached `TransitRoute` object for offline use
+- `route_history` — `RouteHistoryEntry[]` array (`{destination, count, lastUsed}`)
 
 ### Data Interfaces
 - `TransitRoute` — totalTimeText/Value, mode, fare, steps[], coordinates[], crowdLevel, isLive, etaMins
@@ -61,22 +63,26 @@ SettingsScreen
 - Tracking status indicator (green dot + "Tracking Active")
 - Map modal centered on user position with route polyline
 - TTC color coding throughout
-- Local notifications + haptic alerts at destination
+- Local notifications + haptic alerts at destination + transfers
 - ETA sharing via native share sheet
 - Accessibility mode (font/spacing scaling)
+- Offline caching — cached route used as fallback in dead zones
+- Directional compass — walking steps show N/S/E/W direction
+- Return trip — saves origin as custom location shortcut
+- Station entrances — dynamic hints from walking step + static lookup
+- Live "stops remaining" countdown on active transit steps
+- Frequent routes — auto-surfaces destinations searched 3+ times as chips
+- Persistent trip notification — silent lock screen updates ("3 stops left · Arriving 3:42 PM")
+- Service disruption alerts — polls GTFS-RT relay, shows banner when route affected
 
 ### Mock/Partial
 - Crowd levels — UI works, data is randomly generated
-- Entrance hints — hardcoded "Front St W via Path" for all stations
-- Return trip button — shows demo alert, doesn't save
+- Disruption alerts — app-side ready, relay server needs `/api/alerts` endpoint
 
 ### Not Implemented
-- Offline caching — route saved but not read back as fallback
-- Directional compass — walking steps show no N/S/E/W direction
-- Haptic alerts for transfers — only fires at final destination
-- Dynamic disruption rerouting
+- Dynamic disruption rerouting (auto-reroute on delay)
 - In-station navigation (transfer directions)
-- iOS Live Activities / Dynamic Island
+- iOS Live Activities / Dynamic Island (requires native widget extension, not available in Expo Go)
 
 ## Design Principles
 - Keep it simple. No clutter. Every element must earn its place.
