@@ -1,9 +1,5 @@
 import axios from 'axios';
-import Constants from 'expo-constants';
-
-const HOST = Constants.expoConfig?.hostUri?.split(':')[0] || 'localhost';
-const RELAY_NEARBY_URL = `http://${HOST}:3000/api/nearby`;
-const RELAY_PREDICTIONS_URL = `http://${HOST}:3000/api/predictions`;
+import { ENDPOINTS } from '../config/api';
 
 // Well-known TTC route names for display
 const ROUTE_NAMES: Record<string, string> = {
@@ -65,7 +61,7 @@ interface TripPrediction {
  */
 async function fetchPredictions(routeId: string): Promise<TripPrediction[]> {
     try {
-        const response = await axios.get(RELAY_PREDICTIONS_URL, {
+        const response = await axios.get(ENDPOINTS.predictions, {
             params: { route: routeId },
             timeout: 5000,
         });
@@ -128,7 +124,7 @@ export async function fetchNearbyVehicles(
     radius: number = 800
 ): Promise<NearbyVehicle[]> {
     try {
-        const response = await axios.get(RELAY_NEARBY_URL, {
+        const response = await axios.get(ENDPOINTS.nearby, {
             params: { lat, lon, radius },
             timeout: 5000,
         });

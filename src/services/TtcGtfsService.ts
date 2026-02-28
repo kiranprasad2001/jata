@@ -1,17 +1,13 @@
 import axios from 'axios';
-import { TransitRoute } from './GoogleDirectionsService';
-import Constants from 'expo-constants';
-
-// Relay Server (Dynamically uses dev machine IP for physical device testing)
-const HOST = Constants.expoConfig?.hostUri?.split(':')[0] || 'localhost';
-const RELAY_VEHICLES_URL = `http://${HOST}:3000/api/vehicles`;
+import { TransitRoute } from './DirectionsService';
+import { ENDPOINTS } from '../config/api';
 
 export const fetchLiveStatus = async (routes: TransitRoute[]): Promise<TransitRoute[]> => {
     let vehicles: any[] = [];
 
     try {
         // Fetch pre-parsed JSON from our Relay Server
-        const response = await axios.get(RELAY_VEHICLES_URL, {
+        const response = await axios.get(ENDPOINTS.vehicles, {
             timeout: 5000
         });
         vehicles = response.data.vehicles || [];
@@ -67,11 +63,9 @@ export interface ServiceAlert {
     affectedRouteIds: string[];
 }
 
-const RELAY_ALERTS_URL = `http://${HOST}:3000/api/alerts`;
-
 export const fetchServiceAlerts = async (routeIds: string[]): Promise<ServiceAlert[]> => {
     try {
-        const response = await axios.get(RELAY_ALERTS_URL, { timeout: 5000 });
+        const response = await axios.get(ENDPOINTS.alerts, { timeout: 5000 });
         const alerts: ServiceAlert[] = response.data.alerts || [];
         if (routeIds.length === 0) return alerts;
         return alerts.filter(alert =>

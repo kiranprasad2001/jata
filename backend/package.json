@@ -12,6 +12,7 @@
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
+    "@mapbox/polyline": "^1.2.1",
     "axios": "^1.13.5",
     "cors": "^2.8.6",
     "dotenv": "^17.3.1",
@@ -21,6 +22,7 @@
   "devDependencies": {
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
+    "@types/mapbox__polyline": "^1.0.5",
     "@types/node": "^25.3.2",
     "nodemon": "^3.1.14",
     "ts-node": "^10.9.2",

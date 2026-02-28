@@ -1,14 +1,7 @@
+// No Google API keys needed — maps use OpenStreetMap tiles,
+// routing uses Transitous (MOTIS), geocoding uses Photon.
 module.exports = ({ config }) => {
     return {
         ...config,
-        android: {
-            ...config.android,
-            config: {
-                ...config.android?.config,
-                googleMaps: {
-                    apiKey: process.env.EXPO_PUBLIC_GOOGLE_MAPS_KEY
-                }
-            }
-        }
     };
 };
