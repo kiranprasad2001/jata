@@ -23,7 +23,7 @@
     },
     "android": {
       "package": "com.kiran.jata",
-      "usesCleartextTraffic": true,
+      "usesCleartextTraffic": false,
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/android-icon-foreground.png",
@@ -49,6 +49,9 @@
       [
         "expo-notifications",
         {}
+      ],
+      [
+        "expo-secure-store"
       ]
     ],
     "web": {

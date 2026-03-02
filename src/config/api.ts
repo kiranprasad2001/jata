@@ -1,5 +1,6 @@
 import Constants from 'expo-constants';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as SecureStore from 'expo-secure-store';
 
 /**
  * Centralized backend API configuration.
@@ -25,7 +26,7 @@ export const initApiConfig = async () => {
         const savedUrl = await AsyncStorage.getItem('backend_url');
         if (savedUrl) _baseUrl = savedUrl;
 
-        const savedKey = await AsyncStorage.getItem('google_api_key');
+        const savedKey = await SecureStore.getItemAsync('google_api_key');
         if (savedKey) _googleApiKey = savedKey;
     } catch (e) {
         console.warn('[JATA] Failed to load API config from storage:', e);
@@ -56,9 +57,9 @@ export const setGoogleApiKey = async (key: string) => {
     _googleApiKey = trimmed || null;
     try {
         if (trimmed) {
-            await AsyncStorage.setItem('google_api_key', trimmed);
+            await SecureStore.setItemAsync('google_api_key', trimmed);
         } else {
-            await AsyncStorage.removeItem('google_api_key');
+            await SecureStore.deleteItemAsync('google_api_key');
         }
     } catch (e) {
         console.warn('[JATA] Failed to save Google API key:', e);

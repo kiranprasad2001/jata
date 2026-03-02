@@ -3,13 +3,24 @@ import cors from 'cors';
 import axios from 'axios';
 import GtfsRealtimeBindings from 'gtfs-realtime-bindings';
 import polyline from '@mapbox/polyline';
-import dotenv from 'dotenv';
+import * as dotenv from 'dotenv';
+import rateLimit from 'express-rate-limit';
 
 dotenv.config();
 
 const app = express();
 app.use(cors());
 app.use(express.json());
+
+// ── Rate Limiting (NEW) ──────────────────────────────────
+const limiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    limit: 100, // limit each IP to 100 requests per windowMs
+    message: { error: 'Too many requests from this IP, please try again after 15 minutes' },
+    validate: { xForwardedForHeader: false },
+});
+
+app.use(limiter);
 
 const PORT = parseInt(process.env.PORT || '3000', 10);
 
