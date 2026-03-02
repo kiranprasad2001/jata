@@ -11,7 +11,7 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-const PORT = process.env.PORT || 3000;
+const PORT = parseInt(process.env.PORT || '3000', 10);
 
 // ── External API URLs (configurable for self-hosting) ───
 const ROUTING_API_URL = process.env.ROUTING_API_URL || 'https://api.transitous.org/api';
@@ -364,15 +364,147 @@ async function resolveCoords(input: string): Promise<{ lat: number; lng: number 
     return geocode(input);
 }
 
+// ── Google Directions Helper ────────────────────────────
+// Calls Google Directions API and transforms to TransitRoute[]
+async function fetchGoogleDirections(origin: string, destination: string, googleApiKey: string) {
+    const googleResp = await axios.get(
+        'https://maps.googleapis.com/maps/api/directions/json',
+        {
+            params: {
+                origin,
+                destination,
+                mode: 'transit',
+                alternatives: true,
+                region: 'ca',
+                departure_time: 'now',
+                key: googleApiKey,
+            },
+            timeout: 15000,
+        }
+    );
+
+    if (googleResp.data.status !== 'OK') {
+        throw new Error(`Google Directions: ${googleResp.data.status}`);
+    }
+
+    return googleResp.data.routes.map((route: any) => {
+        const leg = route.legs[0];
+
+        const steps = leg.steps.map((step: any) => {
+            let transitDetails = undefined;
+            if (step.travel_mode === 'TRANSIT' && step.transit_details) {
+                const td = step.transit_details;
+                transitDetails = {
+                    departureStop: td.departure_stop?.name || '',
+                    arrivalStop: td.arrival_stop?.name || '',
+                    departureTime: td.departure_time?.text || '',
+                    departureTimeValue: td.departure_time?.value,
+                    arrivalTimeValue: td.arrival_time?.value,
+                    lineName: td.line?.name || td.line?.short_name || 'Transit',
+                    lineColor: td.line?.color,
+                    vehicleType: td.line?.vehicle?.type || 'BUS',
+                    numStops: td.num_stops || 1,
+                };
+            }
+
+            return {
+                htmlInstructions: step.html_instructions || '',
+                distanceText: step.distance?.text || '',
+                durationText: step.duration?.text || '',
+                durationValue: step.duration?.value || 0,
+                travelMode: step.travel_mode,
+                startLocation: step.start_location,
+                endLocation: step.end_location,
+                transitDetails,
+            };
+        });
+
+        const transitSteps = steps.filter((s: any) => s.travelMode === 'TRANSIT');
+        const primaryMode = transitSteps.length > 0
+            ? (transitSteps[0].transitDetails?.vehicleType || 'TRANSIT')
+            : 'WALKING';
+
+        let etaMins = undefined;
+        if (transitSteps.length > 0 && transitSteps[0].transitDetails?.departureTimeValue) {
+            const depMs = transitSteps[0].transitDetails.departureTimeValue * 1000;
+            etaMins = Math.max(0, Math.floor((depMs - Date.now()) / 60000));
+        }
+
+        // Google polyline uses precision 5 (@mapbox/polyline default)
+        let coordinates = undefined;
+        if (route.overview_polyline?.points) {
+            const decoded = polyline.decode(route.overview_polyline.points);
+            coordinates = decoded.map((pair: [number, number]) => ({
+                latitude: pair[0],
+                longitude: pair[1],
+            }));
+        }
+
+        return {
+            totalTimeText: leg.duration?.text || '',
+            totalTimeValue: leg.duration?.value || 0,
+            mode: primaryMode,
+            fare: route.fare?.text || '$3.35',
+            steps,
+            etaMins,
+            coordinates,
+        };
+    });
+}
+
+// ── Google Places Helper ────────────────────────────────
+// Calls Google Places Autocomplete and transforms to PlacePrediction[]
+async function fetchGooglePlaces(query: string, lat: number, lon: number, googleApiKey: string) {
+    const placesResp = await axios.get(
+        'https://maps.googleapis.com/maps/api/place/autocomplete/json',
+        {
+            params: {
+                input: query,
+                location: `${lat},${lon}`,
+                radius: 50000,
+                types: 'geocode|establishment',
+                key: googleApiKey,
+            },
+            timeout: 5000,
+        }
+    );
+
+    if (placesResp.data.status !== 'OK') {
+        throw new Error(`Google Places: ${placesResp.data.status}`);
+    }
+
+    return placesResp.data.predictions.map((p: any) => ({
+        place_id: p.place_id,
+        description: p.description,
+        structured_formatting: {
+            main_text: p.structured_formatting?.main_text || p.description,
+            secondary_text: p.structured_formatting?.secondary_text || '',
+        },
+        // Google Places Autocomplete doesn't return coordinates
+    }));
+}
+
 // ── Transit Directions Endpoint ─────────────────────────
-// POST /api/directions { origin: string, destination: string }
-// Calls Transitous (MOTIS) API and returns TransitRoute[] matching frontend interface
+// POST /api/directions { origin, destination, googleApiKey? }
+// If googleApiKey is present, uses Google Directions API. Otherwise, Transitous (MOTIS).
 app.post('/api/directions', async (req, res) => {
-    const { origin, destination } = req.body;
+    const { origin, destination, googleApiKey } = req.body;
     if (!origin || !destination) {
         return res.status(400).json({ error: 'origin and destination are required' });
     }
 
+    // ── Google Directions path (if key provided) ──────
+    if (googleApiKey) {
+        try {
+            const routes = await fetchGoogleDirections(origin, destination, googleApiKey);
+            return res.json({ routes });
+        } catch (error: any) {
+            console.warn('[JATA] Google Directions failed, falling back to MOTIS:', error.message);
+            // Fall through to MOTIS
+        }
+    }
+
+    // ── MOTIS path (default / fallback) ───────────────
     try {
         // Resolve coordinates
         const [fromCoords, toCoords] = await Promise.all([
@@ -486,17 +618,30 @@ app.post('/api/directions', async (req, res) => {
 });
 
 // ── Search / Geocoding Endpoint ─────────────────────────
-// GET /api/search?q=union+station&lat=43.65&lon=-79.38
-// Calls Photon and returns PlacePrediction[] matching frontend interface
+// GET /api/search?q=union+station&lat=43.65&lon=-79.38&googleApiKey=AIza...
+// If googleApiKey is present, uses Google Places. Otherwise, Photon.
 app.get('/api/search', async (req, res) => {
     const query = req.query.q as string;
     const lat = parseFloat(req.query.lat as string) || 43.6532;
     const lon = parseFloat(req.query.lon as string) || -79.3832;
+    const googleApiKey = req.query.googleApiKey as string;
 
     if (!query || query.length < 2) {
         return res.json({ predictions: [] });
     }
 
+    // ── Google Places path (if key provided) ──────────
+    if (googleApiKey) {
+        try {
+            const predictions = await fetchGooglePlaces(query, lat, lon, googleApiKey);
+            return res.json({ predictions });
+        } catch (error: any) {
+            console.warn('[JATA] Google Places failed, falling back to Photon:', error.message);
+            // Fall through to Photon
+        }
+    }
+
+    // ── Photon path (default / fallback) ──────────────
     try {
         const photonResp = await axios.get(`${GEOCODING_API_URL}/api/`, {
             params: { q: query, lat, lon, limit: 5 },
@@ -534,7 +679,7 @@ app.get('/api/search', async (req, res) => {
     }
 });
 
-app.listen(PORT, () => {
+app.listen(PORT, '0.0.0.0', () => {
     console.log(`JATA Relay Server running on http://localhost:${PORT}`);
     console.log(`Routing: ${ROUTING_API_URL}`);
     console.log(`Geocoding: ${GEOCODING_API_URL}`);

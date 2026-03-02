@@ -9,7 +9,7 @@ import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../navigation/types';
 import * as Location from 'expo-location';
 import axios from 'axios';
-import { ENDPOINTS } from '../config/api';
+import { ENDPOINTS, getGoogleApiKey } from '../config/api';
 import { recordRouteSearch, getFrequentRoutes } from '../utils/routeHistory';
 import { recordCommuteDeparture, getTodaysPatterns, getNextCommute, formatPatternTime, shortDestination, CommutePattern } from '../utils/commutePatterns';
 import { fetchNearbyVehicles, NearbyVehicle } from '../services/NearbyDeparturesService';
@@ -52,11 +52,13 @@ export default function HomeScreen() {
             return;
         }
         try {
+            const googleApiKey = getGoogleApiKey();
             const response = await axios.get(ENDPOINTS.search, {
                 params: {
                     q: query,
                     lat: userCoords?.lat || 43.6532,
                     lon: userCoords?.lon || -79.3832,
+                    ...(googleApiKey ? { googleApiKey } : {}),
                 },
             });
             setSuggestions(response.data.predictions?.slice(0, 5) || []);

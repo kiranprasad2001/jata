@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { ENDPOINTS } from '../config/api';
+import { ENDPOINTS, getGoogleApiKey } from '../config/api';
 
 export interface TransitRoute {
     totalTimeText: string;
@@ -35,17 +35,19 @@ export interface RouteStep {
 
 /**
  * Fetch transit routes from the backend API gateway.
- * Backend proxies to Transitous (MOTIS) and transforms the response.
- * No Google API key needed — zero cost, fully self-hostable.
+ * Default: Transitous (MOTIS) — free, open-source.
+ * If a Google API key is set in Settings, uses Google Directions API instead.
  */
 export const fetchTransitRoutes = async (
     origin: string,
     destination: string
 ): Promise<TransitRoute[]> => {
     try {
+        const googleApiKey = getGoogleApiKey();
         const response = await axios.post(ENDPOINTS.directions, {
             origin,
             destination,
+            ...(googleApiKey ? { googleApiKey } : {}),
         }, { timeout: 20000 });
 
         return response.data.routes || [];
