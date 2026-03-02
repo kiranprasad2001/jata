@@ -1,12 +1,12 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { View, Text, StyleSheet, FlatList, TouchableOpacity, Share, Modal, Platform, Alert, ActivityIndicator } from 'react-native';
-import MapView, { Marker, Polyline } from 'react-native-maps';
+import MapView, { Marker, Polyline, UrlTile } from 'react-native-maps';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRoute, useNavigation } from '@react-navigation/native';
 import { ActiveTransitScreenProps } from '../navigation/types';
 import { COLORS, SPACING, FONT_SIZES } from '../constants/theme';
 import { getBoolean, saveToStorage, getObject } from '../utils/storage';
-import { RouteStep, TransitRoute, fetchTransitRoutes } from '../services/GoogleDirectionsService';
+import { RouteStep, TransitRoute, fetchTransitRoutes } from '../services/DirectionsService';
 import { CustomLocation } from './SettingsScreen';
 import * as Location from 'expo-location';
 import { LOCATION_SETTINGS, calculateDistanceMeters, calculateCardinalDirection } from '../utils/LocationSettings';
@@ -538,14 +538,10 @@ export default function ActiveTransitScreen() {
                         <MapView
                             ref={mapRef}
                             style={{ flex: 1 }}
-                            mapType="mutedStandard"
+                            mapType="none"
                             showsUserLocation={true}
                             followsUserLocation={true}
                             showsMyLocationButton={true}
-                            customMapStyle={[
-                                { featureType: "poi", stylers: [{ visibility: "off" }] },
-                                { featureType: "transit", stylers: [{ visibility: "off" }] }
-                            ]}
                             initialRegion={userLocation ? {
                                 latitude: userLocation.latitude,
                                 longitude: userLocation.longitude,
@@ -571,6 +567,11 @@ export default function ActiveTransitScreen() {
                                 }
                             }}
                         >
+                            <UrlTile
+                                urlTemplate="https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+                                maximumZ={19}
+                                flipY={false}
+                            />
                             {routeData.coordinates && routeData.coordinates.length > 0 ? (
                                 <>
                                     <Polyline

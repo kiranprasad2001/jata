@@ -4,7 +4,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRoute, useNavigation } from '@react-navigation/native';
 import { RouteOptionsScreenProps } from '../navigation/types';
 import { COLORS, SPACING, FONT_SIZES } from '../constants/theme';
-import { fetchTransitRoutes, TransitRoute } from '../services/GoogleDirectionsService';
+import { fetchTransitRoutes, TransitRoute } from '../services/DirectionsService';
 import { fetchLiveStatus } from '../services/TtcGtfsService';
 import { getBoolean } from '../utils/storage';
 

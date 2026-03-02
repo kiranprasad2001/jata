@@ -1,6 +1,6 @@
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 
-import { TransitRoute } from '../services/GoogleDirectionsService';
+import { TransitRoute } from '../services/DirectionsService';
 
 export type RootStackParamList = {
     Home: undefined;

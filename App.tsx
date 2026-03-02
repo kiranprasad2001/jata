@@ -3,6 +3,7 @@ import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { RootStackParamList } from './src/navigation/types';
 import { requestNotificationPermissions } from './src/services/NotificationService';
+import { initApiConfig } from './src/config/api';
 
 import HomeScreen from './src/screens/HomeScreen';
 import SettingsScreen from './src/screens/SettingsScreen';
@@ -13,7 +14,7 @@ const Stack = createNativeStackNavigator<RootStackParamList>();
 
 export default function App() {
   useEffect(() => {
-    // Warm up the notification permissions so the system prompt appears early
+    initApiConfig(); // Load saved backend URL + Google API key
     requestNotificationPermissions();
   }, []);
 

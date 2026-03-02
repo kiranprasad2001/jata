@@ -5,15 +5,17 @@
 - **Distraction-free**: Text-first UI, map is secondary (opt-in modal only)
 - **Stateless client**: All data lives on-device, deleted when app is removed
 - **Anonymous**: GPS used only for routing/alerts, never tied to identity
+- **Zero proprietary APIs**: Fully self-hostable, no Google/Apple API keys needed
 
 ## Tech Stack
 - **Framework**: React Native + Expo (SDK 55, RN 0.83)
-- **Routing API**: Google Directions API (transit mode) via `EXPO_PUBLIC_GOOGLE_MAPS_KEY`
+- **Routing**: [Transitous/MOTIS](https://transitous.org) (free, open-source transit routing with TTC GTFS data)
+- **Geocoding**: [Photon](https://photon.komoot.io) (free, OSM-based search autocomplete)
 - **Live data**: TTC GTFS Realtime via backend relay server (`backend/` dir, port 3000)
+- **Maps**: OpenStreetMap tiles via react-native-maps UrlTile (free, no API key)
 - **Storage**: AsyncStorage (local only, no cloud sync). MMKV is in deps but unused.
 - **Notifications**: 100% local via expo-notifications (no FCM/APNS push tokens)
 - **Haptics**: expo-haptics for proximity alerts
-- **Maps**: react-native-maps, used minimally (modal overlay only)
 
 ## Architecture
 
@@ -27,11 +29,12 @@ SettingsScreen
 ### Key Files
 | File | Purpose |
 |------|---------|
-| `src/screens/HomeScreen.tsx` | "Where to?" search + Google Places autocomplete + saved shortcuts + nearby vehicles + commute nudge |
+| `src/config/api.ts` | Centralized backend URL config (auto-detects Expo dev server IP) |
+| `src/screens/HomeScreen.tsx` | "Where to?" search + Photon autocomplete + saved shortcuts + nearby vehicles + commute nudge |
 | `src/screens/RouteOptionsScreen.tsx` | Route cards with Live/Scheduled badge, fare |
-| `src/screens/ActiveTransitScreen.tsx` | Step-by-step timeline, location tracking, map modal, ETA, disruption rerouting |
+| `src/screens/ActiveTransitScreen.tsx` | Step-by-step timeline, location tracking, OSM map modal, ETA, disruption rerouting |
 | `src/screens/SettingsScreen.tsx` | Home/Work/Custom locations, accessibility mode |
-| `src/services/GoogleDirectionsService.ts` | Fetches transit routes, decodes polylines |
+| `src/services/DirectionsService.ts` | Fetches transit routes from backend (Transitous/MOTIS via `/api/directions`) |
 | `src/services/TtcGtfsService.ts` | Live vehicle data + service disruption alerts from TTC GTFS relay |
 | `src/services/NearbyDeparturesService.ts` | Nearby vehicles with real GTFS-RT stop predictions for "where's my bus?" |
 | `src/services/NotificationService.ts` | Local notifications, haptic alerts, persistent trip notification, predictive departure |
@@ -44,10 +47,12 @@ SettingsScreen
 | `src/constants/theme.ts` | TTC colors: Yellow (#FFCC00), Green (#00A54F), Red (#DA291C) |
 | `src/navigation/types.ts` | RootStackParamList type definitions |
 
-### Backend Relay Server (`backend/src/index.ts`)
+### Backend API Gateway (`backend/src/index.ts`)
 | Endpoint | Purpose |
 |----------|---------|
 | `/api/health` | Server status, cache counts, last fetch times |
+| `/api/directions` | Transit routing via Transitous/MOTIS → TransitRoute[] |
+| `/api/search` | Geocoding via Photon → PlacePrediction[] |
 | `/api/vehicles` | All cached vehicles or filtered by `?route=ID` |
 | `/api/nearby` | Vehicles within radius of `?lat=X&lon=X&radius=800` |
 | `/api/alerts` | TTC service alerts from GTFS-RT, optional `?routes=1,504` filter |
@@ -74,12 +79,12 @@ SettingsScreen
 
 ### Done
 - No auth, local-only storage, anonymous GPS
-- "Where to?" one-tap interface with Google Places autocomplete
+- "Where to?" one-tap interface with Photon autocomplete (OSM-based)
 - Route options with Live/Scheduled badges, fare
 - Step-by-step timeline with current step tracking ("YOU ARE HERE")
 - Arrival time display ("Arrive by 3:45 PM")
 - Tracking status indicator (green dot + "Tracking Active")
-- Map modal centered on user position with route polyline
+- Map modal with OpenStreetMap tiles + route polyline
 - TTC color coding throughout
 - Local notifications + haptic alerts at destination + transfers
 - ETA sharing via native share sheet
@@ -110,6 +115,8 @@ SettingsScreen
 - No over-engineering: skip abstractions for one-time operations
 
 ## Environment
-- API key: Set `EXPO_PUBLIC_GOOGLE_MAPS_KEY` in `.env`
-- Backend relay: Run `cd backend && npm start` for live TTC vehicle data (vehicles + alerts + trip updates)
-- Dev: `npx expo start` — scan QR with Expo Go on iOS/Android
+- **No API keys needed** — all APIs are free and open-source
+- Backend: `cd backend && npm start` (relay + routing + geocoding gateway on port 3000)
+- Frontend: `npx expo start` — scan QR with Expo Go on iOS/Android
+- Docker: `docker compose up` for containerized backend
+- See `.env.example` for configurable environment variables

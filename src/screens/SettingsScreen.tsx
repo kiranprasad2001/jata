@@ -3,6 +3,7 @@ import { View, Text, Switch, StyleSheet, TouchableOpacity, TextInput, ScrollView
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { COLORS, SPACING, FONT_SIZES } from '../constants/theme';
 import { getBoolean, saveToStorage, getString, getObject } from '../utils/storage';
+import { getBaseUrl, getGoogleApiKey, setBackendUrl, setGoogleApiKey } from '../config/api';
 import { useNavigation } from '@react-navigation/native';
 
 export interface CustomLocation {
@@ -22,12 +23,18 @@ export default function SettingsScreen() {
     const [newLabel, setNewLabel] = useState('');
     const [newStop, setNewStop] = useState('');
 
+    // Advanced settings
+    const [backendUrl, setBackendUrlState] = useState('');
+    const [googleApiKey, setGoogleApiKeyState] = useState('');
+
     useEffect(() => {
         const loadSettings = async () => {
             setIsAccessibilityMode((await getBoolean('accessibility_mode')) ?? false);
             setHomeStop((await getString('home_stop')) || '');
             setWorkStop((await getString('work_stop')) || '');
             setCustomLocations((await getObject<CustomLocation[]>('custom_locations')) || []);
+            setBackendUrlState(getBaseUrl());
+            setGoogleApiKeyState(getGoogleApiKey() || '');
         };
         loadSettings();
     }, []);
@@ -75,6 +82,16 @@ export default function SettingsScreen() {
         const updated = customLocations.filter(loc => loc.id !== id);
         setCustomLocations(updated);
         await saveToStorage('custom_locations', updated);
+    };
+
+    const handleSaveBackendUrl = async (val: string) => {
+        setBackendUrlState(val);
+        await setBackendUrl(val);
+    };
+
+    const handleSaveGoogleApiKey = async (val: string) => {
+        setGoogleApiKeyState(val);
+        await setGoogleApiKey(val);
     };
 
     return (
@@ -198,6 +215,62 @@ export default function SettingsScreen() {
                         >
                             <Text style={{ color: COLORS.background, fontWeight: 'bold', textAlign: 'center', fontSize: scaleFont(FONT_SIZES.md) }}>Save Shortcut</Text>
                         </TouchableOpacity>
+                    </View>
+                </View>
+
+                <View style={[styles.section, { marginTop: scaleSpacing(SPACING.xl) }]}>
+                    <Text style={[styles.sectionTitle, { fontSize: scaleFont(FONT_SIZES.lg) }]}>Advanced</Text>
+
+                    <View style={[styles.inputGroup, { marginTop: scaleSpacing(SPACING.md) }]}>
+                        <Text style={[styles.inputLabel, { fontSize: scaleFont(FONT_SIZES.md) }]}>Backend Server URL</Text>
+                        <TextInput
+                            style={[
+                                styles.input,
+                                {
+                                    fontSize: scaleFont(FONT_SIZES.md),
+                                    padding: scaleSpacing(SPACING.sm),
+                                    borderColor: isAccessibilityMode ? COLORS.text : COLORS.border
+                                }
+                            ]}
+                            value={backendUrl}
+                            onChangeText={setBackendUrlState}
+                            onEndEditing={() => handleSaveBackendUrl(backendUrl)}
+                            placeholder="http://your-server:3000"
+                            placeholderTextColor={COLORS.textSecondary}
+                            autoCapitalize="none"
+                            autoCorrect={false}
+                            keyboardType="url"
+                            accessibilityLabel="Backend Server URL"
+                        />
+                        <Text style={{ fontSize: scaleFont(FONT_SIZES.sm), color: COLORS.textSecondary, marginTop: SPACING.xs }}>
+                            For self-hosted backends. Leave default for normal use.
+                        </Text>
+                    </View>
+
+                    <View style={[styles.inputGroup, { marginTop: scaleSpacing(SPACING.md) }]}>
+                        <Text style={[styles.inputLabel, { fontSize: scaleFont(FONT_SIZES.md) }]}>Google API Key</Text>
+                        <TextInput
+                            style={[
+                                styles.input,
+                                {
+                                    fontSize: scaleFont(FONT_SIZES.md),
+                                    padding: scaleSpacing(SPACING.sm),
+                                    borderColor: isAccessibilityMode ? COLORS.text : COLORS.border
+                                }
+                            ]}
+                            value={googleApiKey}
+                            onChangeText={setGoogleApiKeyState}
+                            onEndEditing={() => handleSaveGoogleApiKey(googleApiKey)}
+                            placeholder="AIza..."
+                            placeholderTextColor={COLORS.textSecondary}
+                            autoCapitalize="none"
+                            autoCorrect={false}
+                            secureTextEntry
+                            accessibilityLabel="Google API Key"
+                        />
+                        <Text style={{ fontSize: scaleFont(FONT_SIZES.sm), color: COLORS.textSecondary, marginTop: SPACING.xs }}>
+                            Optional. Enables Google Maps, Places, and Directions instead of free alternatives.
+                        </Text>
                     </View>
                 </View>
             </ScrollView>
