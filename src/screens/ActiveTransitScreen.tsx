@@ -1,6 +1,17 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { View, Text, StyleSheet, FlatList, TouchableOpacity, Share, Modal, Platform, Alert, ActivityIndicator } from 'react-native';
-import MapView, { Marker, Polyline, UrlTile } from 'react-native-maps';
+
+// Conditional import: react-native-maps crashes on web at import time
+// (codegenNativeComponent is not available). The map modal is already
+// hidden on web via Platform.OS checks, so we just skip the import.
+let MapView: any, Marker: any, Polyline: any, UrlTile: any;
+if (Platform.OS !== 'web') {
+    const Maps = require('react-native-maps');
+    MapView = Maps.default;
+    Marker = Maps.Marker;
+    Polyline = Maps.Polyline;
+    UrlTile = Maps.UrlTile;
+}
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRoute, useNavigation } from '@react-navigation/native';
 import { ActiveTransitScreenProps } from '../navigation/types';
@@ -58,7 +69,7 @@ export default function ActiveTransitScreen() {
     const [isRerouting, setIsRerouting] = useState(false);
     const [hasOfferedReroute, setHasOfferedReroute] = useState(false);
     const [subwayOfflineInfo, setSubwayOfflineInfo] = useState<string | null>(null);
-    const mapRef = useRef<MapView>(null);
+    const mapRef = useRef<any>(null);
 
     // Feature 4: Identify transfer steps (TRANSIT followed eventually by another TRANSIT)
     const transferStepIndices = useMemo(() => {
