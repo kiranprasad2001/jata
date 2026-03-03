@@ -85,6 +85,8 @@ export const ENDPOINTS = {
     get search() { return `${_baseUrl}/api/search`; },
     get vehicles() { return `${_baseUrl}/api/vehicles`; },
     get nearby() { return `${_baseUrl}/api/nearby`; },
+    get stopsNearby() { return `${_baseUrl}/api/stops/nearby`; },
+    stopDepartures: (stopId: string) => `${_baseUrl}/api/stops/${encodeURIComponent(stopId)}/departures`,
     get alerts() { return `${_baseUrl}/api/alerts`; },
     get predictions() { return `${_baseUrl}/api/predictions`; },
     get health() { return `${_baseUrl}/api/health`; },
