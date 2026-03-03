@@ -38,6 +38,10 @@ const TTC_VEHICLE_POSITIONS_URL = 'https://bustime.ttc.ca/gtfsrt/vehicles';
 const TTC_SERVICE_ALERTS_URL = 'https://bustime.ttc.ca/gtfsrt/alerts';
 const TTC_TRIP_UPDATES_URL = 'https://bustime.ttc.ca/gtfsrt/tripupdates';
 
+// ── NextBus / UmoIQ API (for stop predictions) ─────────
+const NEXTBUS_API_URL = 'https://retro.umoiq.com/service/publicJSONFeed';
+const NEXTBUS_AGENCY = 'ttc';
+
 // ── In-Memory Caches ──────────────────────────────────────
 let vehicleCache: any[] = [];
 let alertsCache: any[] = [];
@@ -48,6 +52,11 @@ let lastTripUpdatesFetch: Date | null = null;
 let isFetchingVehicles = false;
 let isFetchingAlerts = false;
 let isFetchingTripUpdates = false;
+
+// NextBus stop index: maps GTFS stopId → { NextBus tag, route tags[] }
+let nextbusIndex = new Map<string, { tag: string; routes: string[] }>();
+let nextbusIndexReady = false;
+let lastNextbusIndexBuild: Date | null = null;
 
 // ── Haversine distance (meters) ──────────────────────────
 function haversineMeters(lat1: number, lon1: number, lat2: number, lon2: number): number {
@@ -132,15 +141,81 @@ const updateTripUpdatesCache = async () => {
     }
 };
 
+// ── Build NextBus Stop Index (background, on startup + every 6h) ──
+// Maps each GTFS stop_id to its NextBus tag and which route tags serve it.
+// This enables simple predictions via retro.umoiq.com predictionsForMultiStops.
+const buildNextbusIndex = async () => {
+    try {
+        console.log(`[${new Date().toISOString()}] Building NextBus stop index...`);
+
+        // Step 1: Get all TTC route tags
+        const routeListResp = await axios.get(NEXTBUS_API_URL, {
+            params: { command: 'routeList', a: NEXTBUS_AGENCY },
+            timeout: 15000,
+        });
+        let routes = routeListResp.data?.route || [];
+        if (!Array.isArray(routes)) routes = [routes]; // single route edge case
+
+        console.log(`[NextBus] Found ${routes.length} routes, fetching configs...`);
+
+        // Step 2: Fetch routeConfig for each route in parallel batches
+        const tempIndex = new Map<string, { tag: string; routes: Set<string> }>();
+        const BATCH_SIZE = 15;
+
+        for (let i = 0; i < routes.length; i += BATCH_SIZE) {
+            const batch = routes.slice(i, i + BATCH_SIZE);
+            await Promise.all(batch.map(async (route: any) => {
+                const routeTag = route.tag;
+                try {
+                    const resp = await axios.get(NEXTBUS_API_URL, {
+                        params: { command: 'routeConfig', a: NEXTBUS_AGENCY, r: routeTag },
+                        timeout: 10000,
+                    });
+
+                    let stops = resp.data?.route?.stop || [];
+                    if (!Array.isArray(stops)) stops = [stops];
+
+                    for (const stop of stops) {
+                        if (!stop.stopId || !stop.tag) continue;
+                        const existing = tempIndex.get(stop.stopId);
+                        if (existing) {
+                            existing.routes.add(routeTag);
+                        } else {
+                            tempIndex.set(stop.stopId, { tag: stop.tag, routes: new Set([routeTag]) });
+                        }
+                    }
+                } catch (e: any) {
+                    console.warn(`[NextBus] routeConfig failed for r=${routeTag}: ${e.message}`);
+                }
+            }));
+        }
+
+        // Convert Sets → arrays and store
+        const newIndex = new Map<string, { tag: string; routes: string[] }>();
+        for (const [stopId, data] of tempIndex) {
+            newIndex.set(stopId, { tag: data.tag, routes: Array.from(data.routes) });
+        }
+
+        nextbusIndex = newIndex;
+        nextbusIndexReady = true;
+        lastNextbusIndexBuild = new Date();
+        console.log(`[NextBus] Index built: ${nextbusIndex.size} stops mapped across ${routes.length} routes`);
+    } catch (e: any) {
+        console.error(`[NextBus] Failed to build index: ${e.message}`);
+    }
+};
+
 // Start polling
 setInterval(updateVehicleCache, 15000);
 setInterval(updateAlertsCache, 60000);
 setInterval(updateTripUpdatesCache, 30000);
+setInterval(buildNextbusIndex, 6 * 60 * 60 * 1000); // Refresh every 6 hours
 
 // Initial fetches
 updateVehicleCache();
 updateAlertsCache();
 updateTripUpdatesCache();
+buildNextbusIndex(); // Build in background — doesn't block startup
 
 // ── Health Endpoint ──────────────────────────────────────
 app.get('/api/health', (req, res) => {
@@ -149,6 +224,7 @@ app.get('/api/health', (req, res) => {
         vehicles: { count: vehicleCache.length, lastFetch: lastVehicleFetch },
         alerts: { count: alertsCache.length, lastFetch: lastAlertsFetch },
         tripUpdates: { count: tripUpdatesCache.length, lastFetch: lastTripUpdatesFetch },
+        nextbusIndex: { ready: nextbusIndexReady, stops: nextbusIndex.size, lastBuild: lastNextbusIndexBuild },
     });
 });
 
@@ -231,41 +307,158 @@ app.get('/api/stops/nearby', (req, res) => {
     }
 
     nearby.sort((a, b) => a.distanceMeters - b.distanceMeters);
-    res.json({ stops: nearby.slice(0, 8) });
+    res.json({ stops: nearby.slice(0, 4) });
 });
 
 // ── Stop Departures Endpoint ──────────────────────────────
-// Returns upcoming arrivals at a specific stop from the live trip updates cache.
-app.get('/api/stops/:stopId/departures', (req, res) => {
+// Primary: Uses NextBus/UmoIQ API (retro.umoiq.com) — simple, reliable, real predictions.
+// Fallback: GTFS-RT vehicle proximity (when NextBus index not yet built).
+app.get('/api/stops/:stopId/departures', async (req, res) => {
     const { stopId } = req.params;
-    const nowSec = Math.floor(Date.now() / 1000);
-    const departures: { routeId: string; tripId: string; arrivalMins: number; arrivalTime: number }[] = [];
+    const stop = stopsMap[stopId];
 
+    if (!stop) {
+        return res.status(404).json({ error: 'Stop not found' });
+    }
+
+    // ── Primary: NextBus API predictions ──────────────────
+    if (nextbusIndexReady) {
+        const nbData = nextbusIndex.get(stopId);
+        if (nbData && nbData.routes.length > 0) {
+            try {
+                // Build predictionsForMultiStops URL with all routes for this stop
+                const stopsParams = nbData.routes.map(r =>
+                    `stops=${encodeURIComponent(r)}|${encodeURIComponent(nbData.tag)}`
+                ).join('&');
+                const url = `${NEXTBUS_API_URL}?command=predictionsForMultiStops&a=${NEXTBUS_AGENCY}&${stopsParams}`;
+
+                const nbResp = await axios.get(url, { timeout: 8000 });
+
+                // Parse predictions — response.predictions is array or single object
+                let predictions = nbResp.data?.predictions || [];
+                if (!Array.isArray(predictions)) predictions = [predictions];
+
+                const departures: { routeId: string; routeTitle: string; arrivalMins: number; arrivalTime: number; isRealtime: boolean; direction: string }[] = [];
+                const nowSec = Math.floor(Date.now() / 1000);
+
+                for (const pred of predictions) {
+                    if (!pred.direction) continue; // No predictions for this route
+
+                    const routeTag = pred.routeTag || '';
+                    const routeTitle = pred.routeTitle || `Route ${routeTag}`;
+
+                    // direction can be a single object or array (multiple directions)
+                    let directions = pred.direction;
+                    if (!Array.isArray(directions)) directions = [directions];
+
+                    for (const dir of directions) {
+                        let preds = dir.prediction || [];
+                        if (!Array.isArray(preds)) preds = [preds];
+
+                        for (const p of preds) {
+                            const mins = parseInt(p.minutes, 10);
+                            const epochMs = parseInt(p.epochTime, 10);
+                            if (isNaN(mins)) continue;
+
+                            departures.push({
+                                routeId: routeTag,
+                                routeTitle,
+                                arrivalMins: mins,
+                                arrivalTime: epochMs ? Math.floor(epochMs / 1000) : nowSec + mins * 60,
+                                isRealtime: true, // NextBus predictions are always real-time
+                                direction: dir.title || '',
+                            });
+                        }
+                    }
+                }
+
+                // Sort by arrival time and deduplicate (keep first 2 per route+direction)
+                departures.sort((a, b) => a.arrivalTime - b.arrivalTime);
+                const seen = new Map<string, number>();
+                const filtered = departures.filter(d => {
+                    const key = `${d.routeId}|${d.direction}`;
+                    const count = seen.get(key) || 0;
+                    if (count >= 2) return false;
+                    seen.set(key, count + 1);
+                    return true;
+                });
+
+                return res.json({ stopId, source: 'nextbus', departures: filtered.slice(0, 10) });
+            } catch (e: any) {
+                console.warn(`[NextBus] Predictions failed for stop ${stopId}: ${e.message}`);
+                // Fall through to GTFS-RT fallback
+            }
+        }
+    }
+
+    // ── Fallback: GTFS-RT vehicle proximity ───────────────
+    const nowSec = Math.floor(Date.now() / 1000);
+
+    const tripUpdateByTripId = new Map<string, any>();
     for (const entity of tripUpdatesCache) {
         const tu = entity.tripUpdate;
-        if (!tu?.trip?.routeId) continue;
+        if (tu?.trip?.tripId) tripUpdateByTripId.set(tu.trip.tripId, tu);
+    }
 
-        for (const stu of (tu.stopTimeUpdate || [])) {
-            if (stu.stopId !== stopId) continue;
+    const closestByRoute = new Map<string, { dist: number; vehicle: any }>();
+    for (const entity of vehicleCache) {
+        const v = entity.vehicle;
+        if (!v?.position?.latitude || !v?.position?.longitude || !v?.trip?.routeId) continue;
+        const dist = haversineMeters(stop.lat, stop.lon, v.position.latitude, v.position.longitude);
+        if (dist > 1500) continue;
+        const routeId = v.trip.routeId;
+        const existing = closestByRoute.get(routeId);
+        if (!existing || dist < existing.dist) {
+            closestByRoute.set(routeId, { dist, vehicle: v });
+        }
+    }
 
-            const arrTime = stu.arrival?.time?.low || stu.arrival?.time;
-            if (!arrTime || arrTime <= nowSec) continue;
+    const departures: { routeId: string; routeTitle: string; arrivalMins: number; arrivalTime: number; isRealtime: boolean; direction: string }[] = [];
 
-            const arrMins = Math.round((arrTime - nowSec) / 60);
-            if (arrMins > 90) continue; // skip anything more than 90 min out
+    for (const [routeId, { dist, vehicle }] of closestByRoute) {
+        const tripId = vehicle.trip?.tripId;
+        let arrMins: number | undefined;
+        let isRealtime = false;
 
+        if (tripId) {
+            const tu = tripUpdateByTripId.get(tripId);
+            if (tu) {
+                const currentSeq: number = vehicle.currentStopSequence ?? 0;
+                const futureUpdates = (tu.stopTimeUpdate || [])
+                    .filter((stu: any) => {
+                        const arrTime = stu.arrival?.time?.low || stu.arrival?.time;
+                        return arrTime && arrTime > nowSec && (stu.stopSequence ?? 0) >= currentSeq;
+                    })
+                    .sort((a: any, b: any) => (a.stopSequence ?? 0) - (b.stopSequence ?? 0));
+
+                if (futureUpdates.length > 0) {
+                    const nextArrTime = futureUpdates[0].arrival?.time?.low || futureUpdates[0].arrival?.time;
+                    if (nextArrTime) {
+                        arrMins = Math.max(0, Math.round((nextArrTime - nowSec) / 60));
+                        isRealtime = true;
+                    }
+                }
+            }
+        }
+
+        if (arrMins === undefined) {
+            arrMins = Math.max(1, Math.round(dist / 333));
+        }
+
+        if (arrMins <= 60) {
             departures.push({
-                routeId: tu.trip.routeId,
-                tripId: tu.trip.tripId,
+                routeId,
+                routeTitle: `Route ${routeId}`,
                 arrivalMins: arrMins,
-                arrivalTime: arrTime,
+                arrivalTime: nowSec + arrMins * 60,
+                isRealtime,
+                direction: '',
             });
-            break; // one entry per trip is enough
         }
     }
 
     departures.sort((a, b) => a.arrivalTime - b.arrivalTime);
-    res.json({ stopId, departures: departures.slice(0, 12) });
+    res.json({ stopId, source: 'gtfs-rt', departures: departures.slice(0, 10) });
 });
 
 // ── Service Alerts Endpoint (NEW) ────────────────────────
@@ -759,5 +952,6 @@ app.listen(PORT, '0.0.0.0', () => {
     console.log(`Routing: ${ROUTING_API_URL}`);
     console.log(`Geocoding: ${GEOCODING_API_URL}`);
     console.log(`Static stops loaded: ${Object.keys(stopsMap).length} stops`);
+    console.log('NextBus index building in background...');
     console.log('Endpoints: /api/health, /api/vehicles, /api/nearby, /api/stops/nearby, /api/stops/:stopId/departures, /api/alerts, /api/predictions, /api/directions, /api/search');
 });
