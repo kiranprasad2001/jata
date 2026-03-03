@@ -23,10 +23,23 @@ let _googleApiKey: string | null = null;
  */
 export const initApiConfig = async () => {
     try {
+        // Restore user-overridden backend URL (set in Settings > Advanced)
         const savedUrl = await AsyncStorage.getItem('backend_url');
         if (savedUrl) _baseUrl = savedUrl;
 
-        const savedKey = await SecureStore.getItemAsync('google_api_key');
+        let savedKey = await SecureStore.getItemAsync('google_api_key');
+
+        // Migration: If not in SecureStore, check AsyncStorage
+        if (!savedKey) {
+            const legacyKey = await AsyncStorage.getItem('google_api_key');
+            if (legacyKey) {
+                // Move it to SecureStore and remove from AsyncStorage
+                await SecureStore.setItemAsync('google_api_key', legacyKey);
+                await AsyncStorage.removeItem('google_api_key');
+                savedKey = legacyKey;
+            }
+        }
+
         if (savedKey) _googleApiKey = savedKey;
     } catch (e) {
         console.warn('[JATA] Failed to load API config from storage:', e);

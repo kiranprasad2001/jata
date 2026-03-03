@@ -115,7 +115,17 @@ export default function RouteOptionsScreen() {
                     data={routes}
                     keyExtractor={(_, index) => index.toString()}
                     renderItem={renderRouteItem}
-                    contentContainerStyle={{ padding: scaleSpacing(SPACING.md) }}
+                    contentContainerStyle={[{ padding: scaleSpacing(SPACING.md) }, routes.length === 0 && { flexGrow: 1 }]}
+                    ListEmptyComponent={
+                        <View style={styles.centerContainer}>
+                            <Text style={[styles.loadingText, { textAlign: 'center', fontSize: scaleFont(FONT_SIZES.md) }]}>
+                                No routes found for this journey.
+                            </Text>
+                            <TouchableOpacity onPress={() => navigation.goBack()} style={[styles.retryBtn, { marginTop: scaleSpacing(SPACING.md) }]}>
+                                <Text style={{ color: COLORS.line1, fontWeight: 'bold' }}>Try another destination</Text>
+                            </TouchableOpacity>
+                        </View>
+                    }
                 />
             )}
         </SafeAreaView>
