@@ -12,7 +12,7 @@
 - **Routing**: [Transitous/MOTIS](https://transitous.org) (free, open-source transit routing with TTC GTFS data)
 - **Geocoding**: [Photon](https://photon.komoot.io) (free, OSM-based search autocomplete)
 - **Live data**: TTC GTFS Realtime via backend relay server (`backend/` dir, port 3000)
-- **Maps**: OpenStreetMap tiles via react-native-maps UrlTile (free, no API key)
+- **Maps**: OpenStreetMap tiles via Leaflet in react-native-webview (free, no API key, no Google Maps SDK)
 - **Storage**: AsyncStorage (local only, no cloud sync). MMKV is in deps but unused.
 - **Notifications**: 100% local via expo-notifications (no FCM/APNS push tokens)
 - **Haptics**: expo-haptics for proximity alerts

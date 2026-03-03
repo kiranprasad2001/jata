@@ -1,18 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { View, Text, StyleSheet, FlatList, TouchableOpacity, Share, Modal, Platform, Alert, ActivityIndicator } from 'react-native';
 
-// Conditional import: react-native-maps crashes on web at import time
-// (codegenNativeComponent is not available). The map modal is already
-// hidden on web via Platform.OS checks, so we just skip the import.
-let MapView: any, Marker: any, Polyline: any, UrlTile: any;
-if (Platform.OS !== 'web') {
-    const Maps = require('react-native-maps');
-    MapView = Maps.default;
-    Marker = Maps.Marker;
-    Polyline = Maps.Polyline;
-    UrlTile = Maps.UrlTile;
-}
 import { SafeAreaView } from 'react-native-safe-area-context';
+import LeafletMap from '../components/LeafletMap';
 import { useRoute, useNavigation } from '@react-navigation/native';
 import { ActiveTransitScreenProps } from '../navigation/types';
 import { COLORS, SPACING, FONT_SIZES } from '../constants/theme';
@@ -28,7 +18,7 @@ import { updateTripNotification, dismissTripNotification } from '../services/Not
 import { findNearestStation, getCurrentHeadway } from '../data/subwayData';
 
 /** Determine which step index the user is currently on.
- *  Uses departure times from Google transit data — if the current time
+ *  Uses departure times from transit data — if the current time
  *  has passed a transit step's departure time, user is on or past that step. */
 function determineCurrentStep(
     _userLat: number,
@@ -69,7 +59,6 @@ export default function ActiveTransitScreen() {
     const [isRerouting, setIsRerouting] = useState(false);
     const [hasOfferedReroute, setHasOfferedReroute] = useState(false);
     const [subwayOfflineInfo, setSubwayOfflineInfo] = useState<string | null>(null);
-    const mapRef = useRef<any>(null);
 
     // Feature 4: Identify transfer steps (TRANSIT followed eventually by another TRANSIT)
     const transferStepIndices = useMemo(() => {
@@ -546,59 +535,11 @@ export default function ActiveTransitScreen() {
                             </Text>
                             <View style={{ width: 50 }} />
                         </View>
-                        <MapView
-                            ref={mapRef}
-                            style={{ flex: 1 }}
-                            mapType="none"
-                            showsUserLocation={true}
-                            followsUserLocation={true}
-                            showsMyLocationButton={true}
-                            initialRegion={userLocation ? {
-                                latitude: userLocation.latitude,
-                                longitude: userLocation.longitude,
-                                latitudeDelta: 0.02,
-                                longitudeDelta: 0.02,
-                            } : routeData.coordinates?.length ? {
-                                latitude: routeData.coordinates[0].latitude,
-                                longitude: routeData.coordinates[0].longitude,
-                                latitudeDelta: 0.05,
-                                longitudeDelta: 0.05,
-                            } : undefined}
-                            onMapReady={() => {
-                                // Fit map to show both user and entire route
-                                if (routeData.coordinates && routeData.coordinates.length > 0) {
-                                    const allCoords = [...routeData.coordinates];
-                                    if (userLocation) {
-                                        allCoords.push(userLocation);
-                                    }
-                                    mapRef.current?.fitToCoordinates(allCoords, {
-                                        edgePadding: { top: 60, right: 60, bottom: 60, left: 60 },
-                                        animated: true,
-                                    });
-                                }
-                            }}
-                        >
-                            <UrlTile
-                                urlTemplate="https://tile.openstreetmap.org/{z}/{x}/{y}.png"
-                                maximumZ={19}
-                                flipY={false}
-                            />
-                            {routeData.coordinates && routeData.coordinates.length > 0 ? (
-                                <>
-                                    <Polyline
-                                        coordinates={routeData.coordinates}
-                                        strokeColor={COLORS.surface}
-                                        strokeWidth={4}
-                                    />
-                                    {/* Destination marker */}
-                                    <Marker
-                                        coordinate={routeData.coordinates[routeData.coordinates.length - 1]}
-                                        title="Destination"
-                                        pinColor={COLORS.surface}
-                                    />
-                                </>
-                            ) : null}
-                        </MapView>
+                        <LeafletMap
+                            routeCoordinates={routeData.coordinates || []}
+                            userLocation={userLocation}
+                            destinationLabel="Destination"
+                        />
                     </SafeAreaView>
                 </Modal>
             ) : null}

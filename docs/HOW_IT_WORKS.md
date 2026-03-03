@@ -192,14 +192,14 @@ When you're on a subway leg, the app shows a banner with headway information fro
 
 ### Map Modal
 
-A "View Map" button opens a full-screen modal showing your route on an OpenStreetMap-based map. The map displays:
+A "View Map" button opens a full-screen modal showing your route on an OpenStreetMap-based map. The map is rendered using Leaflet (a lightweight open-source mapping library) inside a WebView — no Google Maps SDK or API key required. The map displays:
 
-- Your current location (blue dot)
-- The full route polyline (orange line)
-- A destination marker (orange pin)
+- Your current location (blue circle marker, updates as you move)
+- The full route polyline (TTC Red line)
+- A destination marker (red circle at the final stop)
 - The view auto-fits to show the entire route with padding
 
-The map uses free OpenStreetMap tiles — no Google Maps or Mapbox API key needed. The map is deliberately opt-in (button tap) rather than the default view, keeping the text-first philosophy intact.
+The map uses free OpenStreetMap tiles loaded from the CDN. The map is deliberately opt-in (button tap) rather than the default view, keeping the text-first philosophy intact.
 
 ### Save Return Trip
 
@@ -489,7 +489,7 @@ No API keys are needed. All default services are free and open.
 | Navigation | React Navigation (native stack) | MIT | Screen transitions |
 | Routing engine | Transitous/MOTIS | Open Source | Transit directions using TTC GTFS data |
 | Geocoding | Photon (Komoot) | Apache 2.0 | Address search, autocomplete |
-| Maps | OpenStreetMap tiles via react-native-maps | ODbL/MIT | Map display in modal |
+| Maps | Leaflet + OpenStreetMap tiles via react-native-webview | BSD-2-Clause/ODbL | Map display in modal (no Google Maps SDK) |
 | Real-time data | TTC GTFS-RT feeds | Public | Vehicle positions, alerts, predictions |
 | GTFS-RT decoding | gtfs-realtime-bindings | Apache 2.0 | Protocol Buffer parsing |
 | Local storage | AsyncStorage | MIT | On-device persistence |
