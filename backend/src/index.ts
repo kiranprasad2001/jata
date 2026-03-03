@@ -231,41 +231,95 @@ app.get('/api/stops/nearby', (req, res) => {
     }
 
     nearby.sort((a, b) => a.distanceMeters - b.distanceMeters);
-    res.json({ stops: nearby.slice(0, 8) });
+    res.json({ stops: nearby.slice(0, 4) });
 });
 
 // ── Stop Departures Endpoint ──────────────────────────────
-// Returns upcoming arrivals at a specific stop from the live trip updates cache.
+// TTC's GTFS-RT trip updates use stop_sequence (not stop_id) in stopTimeUpdate,
+// so we can't match by stopId directly. Instead:
+//   Strategy 1: find vehicles physically near the stop, then look up their
+//               trip's upcoming arrival times from the trip updates cache.
+//   Strategy 2: distance-based estimate for vehicles with no trip update.
 app.get('/api/stops/:stopId/departures', (req, res) => {
     const { stopId } = req.params;
-    const nowSec = Math.floor(Date.now() / 1000);
-    const departures: { routeId: string; tripId: string; arrivalMins: number; arrivalTime: number }[] = [];
+    const stop = stopsMap[stopId];
 
+    if (!stop) {
+        return res.status(404).json({ error: 'Stop not found' });
+    }
+
+    const nowSec = Math.floor(Date.now() / 1000);
+
+    // Build a tripId → trip update index for fast lookup
+    const tripUpdateByTripId = new Map<string, any>();
     for (const entity of tripUpdatesCache) {
         const tu = entity.tripUpdate;
-        if (!tu?.trip?.routeId) continue;
+        if (tu?.trip?.tripId) tripUpdateByTripId.set(tu.trip.tripId, tu);
+    }
 
-        for (const stu of (tu.stopTimeUpdate || [])) {
-            if (stu.stopId !== stopId) continue;
+    // Find vehicles within 1.5 km of this stop, keep closest per route
+    const closestByRoute = new Map<string, { dist: number; vehicle: any }>();
+    for (const entity of vehicleCache) {
+        const v = entity.vehicle;
+        if (!v?.position?.latitude || !v?.position?.longitude || !v?.trip?.routeId) continue;
 
-            const arrTime = stu.arrival?.time?.low || stu.arrival?.time;
-            if (!arrTime || arrTime <= nowSec) continue;
+        const dist = haversineMeters(stop.lat, stop.lon, v.position.latitude, v.position.longitude);
+        if (dist > 1500) continue;
 
-            const arrMins = Math.round((arrTime - nowSec) / 60);
-            if (arrMins > 90) continue; // skip anything more than 90 min out
+        const routeId = v.trip.routeId;
+        const existing = closestByRoute.get(routeId);
+        if (!existing || dist < existing.dist) {
+            closestByRoute.set(routeId, { dist, vehicle: v });
+        }
+    }
 
+    const departures: { routeId: string; tripId: string; arrivalMins: number; arrivalTime: number; isRealtime: boolean }[] = [];
+
+    for (const [routeId, { dist, vehicle }] of closestByRoute) {
+        const tripId = vehicle.trip?.tripId;
+        let arrMins: number;
+        let isRealtime = false;
+
+        // Strategy 1: get ETA from trip update using stop_sequence
+        if (tripId) {
+            const tu = tripUpdateByTripId.get(tripId);
+            if (tu) {
+                const currentSeq: number = vehicle.currentStopSequence ?? 0;
+                const futureUpdates = (tu.stopTimeUpdate || [])
+                    .filter((stu: any) => {
+                        const arrTime = stu.arrival?.time?.low || stu.arrival?.time;
+                        return arrTime && arrTime > nowSec && (stu.stopSequence ?? 0) >= currentSeq;
+                    })
+                    .sort((a: any, b: any) => (a.stopSequence ?? 0) - (b.stopSequence ?? 0));
+
+                if (futureUpdates.length > 0) {
+                    const nextArrTime = futureUpdates[0].arrival?.time?.low || futureUpdates[0].arrival?.time;
+                    if (nextArrTime) {
+                        arrMins = Math.max(0, Math.round((nextArrTime - nowSec) / 60));
+                        isRealtime = true;
+                    }
+                }
+            }
+        }
+
+        // Strategy 2: distance-based estimate (~20 km/h = 333 m/min for surface routes)
+        if (!isRealtime) {
+            arrMins = Math.max(1, Math.round(dist / 333));
+        }
+
+        if (arrMins! <= 60) {
             departures.push({
-                routeId: tu.trip.routeId,
-                tripId: tu.trip.tripId,
-                arrivalMins: arrMins,
-                arrivalTime: arrTime,
+                routeId,
+                tripId: tripId || '',
+                arrivalMins: arrMins!,
+                arrivalTime: nowSec + arrMins! * 60,
+                isRealtime,
             });
-            break; // one entry per trip is enough
         }
     }
 
     departures.sort((a, b) => a.arrivalTime - b.arrivalTime);
-    res.json({ stopId, departures: departures.slice(0, 12) });
+    res.json({ stopId, departures: departures.slice(0, 10) });
 });
 
 // ── Service Alerts Endpoint (NEW) ────────────────────────

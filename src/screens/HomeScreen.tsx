@@ -253,6 +253,13 @@ export default function HomeScreen() {
         }
     };
 
+    // Shorten TTC stop names: "King St West At Spadina Ave" → "King St West @ Spadina"
+    const shortenStopName = (name: string): string => {
+        const m = name.match(/^(.+?)\s+[Aa]t\s+(\S+)/);
+        if (m) return `${m[1].trim()} @ ${m[2]}`;
+        return name;
+    };
+
     // Show contextual info when search is empty
     const showContextual = suggestions.length === 0 && searchQuery.length === 0;
 
@@ -338,57 +345,37 @@ export default function HomeScreen() {
                         </TouchableOpacity>
                     )}
 
-                    {/* Nearby stops — bus/streetcar stops + nearest subway station */}
+                    {/* Nearby stops — chips, tap to open departure modal */}
                     {showContextual && (nearbyStops.length > 0 || nearestSubway) && (
                         <View style={styles.nearbyContainer}>
                             <Text style={[styles.nearbyLabel, { fontSize: scaleFont(FONT_SIZES.sm) }]}>Nearby</Text>
-
-                            {/* Subway station row (offline static data) */}
-                            {nearestSubway && nearestSubway.headway > 0 && (
-                                <TouchableOpacity
-                                    style={styles.nearbyRow}
-                                    onPress={() => setSelectedStop({ stopId: `subway-${nearestSubway.stationName}`, name: nearestSubway.stationName, distanceMeters: Math.round(nearestSubway.distanceMeters), lat: 0, lon: 0 })}
-                                    accessibilityRole="button"
-                                    accessibilityLabel={`${nearestSubway.stationName} station, ${Math.round(nearestSubway.distanceMeters)} metres`}
-                                >
-                                    <View style={styles.nearbyStopInfo}>
-                                        <Text style={[styles.nearbyStopIcon, { fontSize: scaleFont(FONT_SIZES.sm) }]}>🚇</Text>
-                                        <View style={styles.nearbyStopText}>
-                                            <Text style={[styles.nearbyStopName, { fontSize: scaleFont(FONT_SIZES.md) }]} numberOfLines={1}>
-                                                {nearestSubway.stationName}
-                                            </Text>
-                                            <Text style={[styles.nearbyStopDist, { fontSize: scaleFont(FONT_SIZES.sm) }]}>
-                                                {Math.round(nearestSubway.distanceMeters)}m
-                                            </Text>
-                                        </View>
-                                    </View>
-                                    <Text style={[styles.nearbyChevron, { fontSize: scaleFont(FONT_SIZES.sm) }]}>›</Text>
-                                </TouchableOpacity>
-                            )}
-
-                            {/* Bus/streetcar stop rows */}
-                            {nearbyStops.map((stop) => (
-                                <TouchableOpacity
-                                    key={stop.stopId}
-                                    style={styles.nearbyRow}
-                                    onPress={() => openStopModal(stop)}
-                                    accessibilityRole="button"
-                                    accessibilityLabel={`${stop.name}, ${stop.distanceMeters} metres`}
-                                >
-                                    <View style={styles.nearbyStopInfo}>
-                                        <Text style={[styles.nearbyStopIcon, { fontSize: scaleFont(FONT_SIZES.sm) }]}>🚌</Text>
-                                        <View style={styles.nearbyStopText}>
-                                            <Text style={[styles.nearbyStopName, { fontSize: scaleFont(FONT_SIZES.md) }]} numberOfLines={1}>
-                                                {stop.name}
-                                            </Text>
-                                            <Text style={[styles.nearbyStopDist, { fontSize: scaleFont(FONT_SIZES.sm) }]}>
-                                                {stop.distanceMeters}m
-                                            </Text>
-                                        </View>
-                                    </View>
-                                    <Text style={[styles.nearbyChevron, { fontSize: scaleFont(FONT_SIZES.sm) }]}>›</Text>
-                                </TouchableOpacity>
-                            ))}
+                            <View style={styles.nearbyChips}>
+                                {nearestSubway && nearestSubway.headway > 0 && (
+                                    <TouchableOpacity
+                                        style={styles.nearbyChip}
+                                        onPress={() => setSelectedStop({ stopId: `subway-${nearestSubway.stationName}`, name: nearestSubway.stationName, distanceMeters: Math.round(nearestSubway.distanceMeters), lat: 0, lon: 0 })}
+                                        accessibilityRole="button"
+                                        accessibilityLabel={`${nearestSubway.stationName} station`}
+                                    >
+                                        <Text style={[styles.nearbyChipText, { fontSize: scaleFont(FONT_SIZES.sm) }]} numberOfLines={1}>
+                                            🚇 {nearestSubway.stationName}
+                                        </Text>
+                                    </TouchableOpacity>
+                                )}
+                                {nearbyStops.map((stop) => (
+                                    <TouchableOpacity
+                                        key={stop.stopId}
+                                        style={styles.nearbyChip}
+                                        onPress={() => openStopModal(stop)}
+                                        accessibilityRole="button"
+                                        accessibilityLabel={stop.name}
+                                    >
+                                        <Text style={[styles.nearbyChipText, { fontSize: scaleFont(FONT_SIZES.sm) }]} numberOfLines={1}>
+                                            🚌 {shortenStopName(stop.name)}
+                                        </Text>
+                                    </TouchableOpacity>
+                                ))}
+                            </View>
                         </View>
                     )}
 
@@ -443,8 +430,12 @@ export default function HomeScreen() {
                                                     <Text style={[styles.modalDepRoute, { fontSize: scaleFont(FONT_SIZES.md) }]} numberOfLines={1}>
                                                         {dep.routeName}
                                                     </Text>
-                                                    <Text style={[styles.modalDepTime, { fontSize: scaleFont(FONT_SIZES.md) }]}>
-                                                        {dep.arrivalMins <= 1 ? 'Now' : `${dep.arrivalMins} min`}
+                                                    <Text style={[
+                                                        styles.modalDepTime,
+                                                        { fontSize: scaleFont(FONT_SIZES.md) },
+                                                        dep.isRealtime ? styles.modalDepTimeRealtime : styles.modalDepTimeEstimate,
+                                                    ]}>
+                                                        {dep.arrivalMins <= 1 ? 'Now' : dep.isRealtime ? `${dep.arrivalMins} min` : `~${dep.arrivalMins} min`}
                                                     </Text>
                                                 </View>
                                             ))
@@ -662,38 +653,23 @@ const styles = StyleSheet.create({
         color: COLORS.textSecondary,
         marginBottom: SPACING.xs,
     },
-    nearbyRow: {
+    nearbyChips: {
         flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
+        flexWrap: 'wrap',
+        gap: SPACING.sm,
+    },
+    nearbyChip: {
+        paddingHorizontal: SPACING.md,
         paddingVertical: SPACING.sm,
-        borderBottomWidth: StyleSheet.hairlineWidth,
-        borderBottomColor: COLORS.border,
+        borderRadius: 20,
+        borderWidth: 1,
+        borderColor: COLORS.border,
+        backgroundColor: '#FAFAFA',
+        maxWidth: '47%',
     },
-    nearbyStopInfo: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        flex: 1,
-        marginRight: SPACING.sm,
-    },
-    nearbyStopIcon: {
-        marginRight: SPACING.sm,
-    },
-    nearbyStopText: {
-        flex: 1,
-    },
-    nearbyStopName: {
-        fontWeight: '500',
+    nearbyChipText: {
         color: COLORS.text,
-    },
-    nearbyStopDist: {
-        color: COLORS.textSecondary,
-        marginTop: 1,
-    },
-    nearbyChevron: {
-        color: COLORS.textSecondary,
-        fontSize: 20,
-        fontWeight: '300',
+        fontWeight: '500',
     },
     // Stop departure modal
     modalBackdrop: {
@@ -741,7 +717,12 @@ const styles = StyleSheet.create({
     },
     modalDepTime: {
         fontWeight: '700',
-        color: COLORS.line2,
+    },
+    modalDepTimeRealtime: {
+        color: COLORS.line2, // Green — GTFS-RT confirmed
+    },
+    modalDepTimeEstimate: {
+        color: COLORS.textSecondary, // Gray — distance-based estimate
     },
     modalSubwayInfo: {
         flexDirection: 'row',

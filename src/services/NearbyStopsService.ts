@@ -44,6 +44,7 @@ export interface StopDeparture {
     routeId: string;
     routeName: string;
     arrivalMins: number;
+    isRealtime: boolean;
 }
 
 /**
@@ -74,10 +75,11 @@ export async function fetchStopDepartures(stopId: string): Promise<StopDeparture
         const response = await axios.get(ENDPOINTS.stopDepartures(stopId), {
             timeout: 5000,
         });
-        return (response.data.departures || []).map((d: { routeId: string; arrivalMins: number }) => ({
+        return (response.data.departures || []).map((d: { routeId: string; arrivalMins: number; isRealtime: boolean }) => ({
             routeId: d.routeId,
             routeName: ROUTE_NAMES[d.routeId] || `Route ${d.routeId}`,
             arrivalMins: d.arrivalMins,
+            isRealtime: d.isRealtime,
         }));
     } catch {
         return [];
