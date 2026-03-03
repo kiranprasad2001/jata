@@ -427,9 +427,16 @@ export default function HomeScreen() {
                                         ) : (
                                             stopDepartures.map((dep, idx) => (
                                                 <View key={idx} style={styles.modalDepRow}>
-                                                    <Text style={[styles.modalDepRoute, { fontSize: scaleFont(FONT_SIZES.md) }]} numberOfLines={1}>
-                                                        {dep.routeName}
-                                                    </Text>
+                                                    <View style={styles.modalDepInfo}>
+                                                        <Text style={[styles.modalDepRoute, { fontSize: scaleFont(FONT_SIZES.md) }]} numberOfLines={1}>
+                                                            {dep.routeName}
+                                                        </Text>
+                                                        {dep.direction ? (
+                                                            <Text style={[styles.modalDepDir, { fontSize: scaleFont(FONT_SIZES.sm) }]} numberOfLines={1}>
+                                                                {dep.direction}
+                                                            </Text>
+                                                        ) : null}
+                                                    </View>
                                                     <Text style={[
                                                         styles.modalDepTime,
                                                         { fontSize: scaleFont(FONT_SIZES.md) },
@@ -710,10 +717,16 @@ const styles = StyleSheet.create({
         borderBottomWidth: StyleSheet.hairlineWidth,
         borderBottomColor: COLORS.border,
     },
-    modalDepRoute: {
+    modalDepInfo: {
         flex: 1,
-        color: COLORS.text,
         marginRight: SPACING.sm,
+    },
+    modalDepRoute: {
+        color: COLORS.text,
+    },
+    modalDepDir: {
+        color: COLORS.textSecondary,
+        marginTop: 1,
     },
     modalDepTime: {
         fontWeight: '700',
