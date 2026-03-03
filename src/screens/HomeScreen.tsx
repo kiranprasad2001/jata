@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, KeyboardAvoidingView, Platform, ScrollView } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, StyleSheet, KeyboardAvoidingView, Platform, ScrollView, Modal, ActivityIndicator, Pressable } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { COLORS, SPACING, FONT_SIZES } from '../constants/theme';
 import { getString, getBoolean, getObject } from '../utils/storage';
@@ -12,7 +12,7 @@ import axios from 'axios';
 import { ENDPOINTS, getGoogleApiKey } from '../config/api';
 import { recordRouteSearch, getFrequentRoutes } from '../utils/routeHistory';
 import { recordCommuteDeparture, getTodaysPatterns, getNextCommute, formatPatternTime, shortDestination, CommutePattern } from '../utils/commutePatterns';
-import { fetchNearbyVehicles, NearbyVehicle } from '../services/NearbyDeparturesService';
+import { fetchNearbyStops, fetchStopDepartures, NearbyStop, StopDeparture } from '../services/NearbyStopsService';
 import { findNearestStation, getCurrentHeadway, SubwayLine } from '../data/subwayData';
 import { schedulePredictiveDeparture } from '../services/NotificationService';
 
@@ -39,12 +39,17 @@ export default function HomeScreen() {
     const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
     const [frequentRoutes, setFrequentRoutes] = useState<{ destination: string; count: number }[]>([]);
 
-    // Phase 4: Nearby vehicles and commute patterns
-    const [nearbyVehicles, setNearbyVehicles] = useState<NearbyVehicle[]>([]);
+    // Nearby stops + commute patterns
+    const [nearbyStops, setNearbyStops] = useState<NearbyStop[]>([]);
     const [commutePatterns, setCommutePatterns] = useState<CommutePattern[]>([]);
     const [nearestSubway, setNearestSubway] = useState<{ line: SubwayLine; stationName: string; headway: number; period: string; distanceMeters: number } | null>(null);
     const [userCoords, setUserCoords] = useState<{ lat: number; lon: number } | null>(null);
     const nearbyInterval = useRef<ReturnType<typeof setInterval> | null>(null);
+
+    // Stop departure modal
+    const [selectedStop, setSelectedStop] = useState<NearbyStop | null>(null);
+    const [stopDepartures, setStopDepartures] = useState<StopDeparture[]>([]);
+    const [loadingDepartures, setLoadingDepartures] = useState(false);
 
     const fetchSuggestions = useCallback(async (query: string) => {
         if (query.length < 2) {
@@ -90,18 +95,14 @@ export default function HomeScreen() {
         });
     };
 
-    // Phase 4: Fetch nearby vehicles and subway info using user's location
+    // Fetch nearby stops (bus/streetcar) and nearest subway station
     const refreshNearby = useCallback(async (lat: number, lon: number) => {
-        try {
-            const vehicles = await fetchNearbyVehicles(lat, lon);
-            setNearbyVehicles(vehicles);
-        } catch {
-            // Silently fail — nearby section just won't show
-        }
+        const stops = await fetchNearbyStops(lat, lon);
+        setNearbyStops(stops);
 
-        // Find nearest subway station for offline info
+        // Nearest subway station — offline static data, show within 1km
         const nearest = findNearestStation(lat, lon);
-        if (nearest && nearest.distanceMeters < 2000) {
+        if (nearest && nearest.distanceMeters < 1000) {
             const { minutes, period } = getCurrentHeadway(nearest.line);
             setNearestSubway({
                 line: nearest.line,
@@ -114,6 +115,21 @@ export default function HomeScreen() {
             setNearestSubway(null);
         }
     }, []);
+
+    const openStopModal = async (stop: NearbyStop) => {
+        setSelectedStop(stop);
+        setStopDepartures([]);
+        setLoadingDepartures(true);
+        const departures = await fetchStopDepartures(stop.stopId);
+        setStopDepartures(departures);
+        setLoadingDepartures(false);
+    };
+
+    const closeStopModal = () => {
+        setSelectedStop(null);
+        setStopDepartures([]);
+        setLoadingDepartures(false);
+    };
 
     // Load saved stops, settings, nearby data on focus
     useEffect(() => {
@@ -322,44 +338,126 @@ export default function HomeScreen() {
                         </TouchableOpacity>
                     )}
 
-                    {/* Phase 4: Nearby vehicles — "504 King — 2 min" */}
-                    {showContextual && nearbyVehicles.length > 0 && (
+                    {/* Nearby stops — bus/streetcar stops + nearest subway station */}
+                    {showContextual && (nearbyStops.length > 0 || nearestSubway) && (
                         <View style={styles.nearbyContainer}>
                             <Text style={[styles.nearbyLabel, { fontSize: scaleFont(FONT_SIZES.sm) }]}>Nearby</Text>
-                            {nearbyVehicles.map((v, idx) => (
-                                <View key={v.id || idx} style={styles.nearbyRow}>
-                                    <View style={styles.nearbyRouteTag}>
-                                        <Text style={[styles.nearbyRouteText, { fontSize: scaleFont(FONT_SIZES.sm) }]}>
-                                            {v.routeName}
-                                        </Text>
+
+                            {/* Subway station row (offline static data) */}
+                            {nearestSubway && nearestSubway.headway > 0 && (
+                                <TouchableOpacity
+                                    style={styles.nearbyRow}
+                                    onPress={() => setSelectedStop({ stopId: `subway-${nearestSubway.stationName}`, name: nearestSubway.stationName, distanceMeters: Math.round(nearestSubway.distanceMeters), lat: 0, lon: 0 })}
+                                    accessibilityRole="button"
+                                    accessibilityLabel={`${nearestSubway.stationName} station, ${Math.round(nearestSubway.distanceMeters)} metres`}
+                                >
+                                    <View style={styles.nearbyStopInfo}>
+                                        <Text style={[styles.nearbyStopIcon, { fontSize: scaleFont(FONT_SIZES.sm) }]}>🚇</Text>
+                                        <View style={styles.nearbyStopText}>
+                                            <Text style={[styles.nearbyStopName, { fontSize: scaleFont(FONT_SIZES.md) }]} numberOfLines={1}>
+                                                {nearestSubway.stationName}
+                                            </Text>
+                                            <Text style={[styles.nearbyStopDist, { fontSize: scaleFont(FONT_SIZES.sm) }]}>
+                                                {Math.round(nearestSubway.distanceMeters)}m
+                                            </Text>
+                                        </View>
                                     </View>
-                                    <Text style={[
-                                        styles.nearbyEta,
-                                        { fontSize: scaleFont(FONT_SIZES.md) },
-                                        v.isRealtime ? styles.nearbyEtaRealtime : styles.nearbyEtaEstimate,
-                                    ]}>
-                                        {v.estimatedArrivalMins <= 1
-                                            ? 'Now'
-                                            : v.isRealtime
-                                                ? `${v.estimatedArrivalMins} min`
-                                                : `~${v.estimatedArrivalMins} min`}
-                                    </Text>
-                                </View>
+                                    <Text style={[styles.nearbyChevron, { fontSize: scaleFont(FONT_SIZES.sm) }]}>›</Text>
+                                </TouchableOpacity>
+                            )}
+
+                            {/* Bus/streetcar stop rows */}
+                            {nearbyStops.map((stop) => (
+                                <TouchableOpacity
+                                    key={stop.stopId}
+                                    style={styles.nearbyRow}
+                                    onPress={() => openStopModal(stop)}
+                                    accessibilityRole="button"
+                                    accessibilityLabel={`${stop.name}, ${stop.distanceMeters} metres`}
+                                >
+                                    <View style={styles.nearbyStopInfo}>
+                                        <Text style={[styles.nearbyStopIcon, { fontSize: scaleFont(FONT_SIZES.sm) }]}>🚌</Text>
+                                        <View style={styles.nearbyStopText}>
+                                            <Text style={[styles.nearbyStopName, { fontSize: scaleFont(FONT_SIZES.md) }]} numberOfLines={1}>
+                                                {stop.name}
+                                            </Text>
+                                            <Text style={[styles.nearbyStopDist, { fontSize: scaleFont(FONT_SIZES.sm) }]}>
+                                                {stop.distanceMeters}m
+                                            </Text>
+                                        </View>
+                                    </View>
+                                    <Text style={[styles.nearbyChevron, { fontSize: scaleFont(FONT_SIZES.sm) }]}>›</Text>
+                                </TouchableOpacity>
                             ))}
                         </View>
                     )}
 
-                    {/* Phase 4: Nearest subway info (offline-capable) */}
-                    {showContextual && nearestSubway && nearestSubway.headway > 0 && (
-                        <View style={[styles.subwayInfoContainer, { borderLeftColor: nearestSubway.line.color }]}>
-                            <Text style={[styles.subwayInfoLine, { fontSize: scaleFont(FONT_SIZES.sm) }]}>
-                                {nearestSubway.line.name}
-                            </Text>
-                            <Text style={[styles.subwayInfoDetail, { fontSize: scaleFont(FONT_SIZES.sm) }]}>
-                                Every {nearestSubway.headway} min · {nearestSubway.stationName} ({Math.round(nearestSubway.distanceMeters)}m)
-                            </Text>
-                        </View>
-                    )}
+                    {/* Stop departure modal */}
+                    <Modal
+                        visible={selectedStop !== null}
+                        transparent
+                        animationType="fade"
+                        onRequestClose={closeStopModal}
+                    >
+                        <Pressable style={styles.modalBackdrop} onPress={closeStopModal}>
+                            <Pressable style={styles.modalCard} onPress={() => {}}>
+                                {selectedStop && (
+                                    <>
+                                        {/* Stop name + distance */}
+                                        <View style={styles.modalHeader}>
+                                            <Text style={[styles.modalStopName, { fontSize: scaleFont(FONT_SIZES.lg) }]} numberOfLines={2}>
+                                                {selectedStop.name}
+                                            </Text>
+                                            <Text style={[styles.modalStopDist, { fontSize: scaleFont(FONT_SIZES.sm) }]}>
+                                                {selectedStop.distanceMeters}m away
+                                            </Text>
+                                        </View>
+
+                                        <View style={styles.modalDivider} />
+
+                                        {/* Subway: show headway */}
+                                        {selectedStop.stopId.startsWith('subway-') && nearestSubway ? (
+                                            <View style={styles.modalSubwayInfo}>
+                                                <View style={[styles.modalSubwayLine, { backgroundColor: nearestSubway.line.color }]} />
+                                                <View>
+                                                    <Text style={[styles.modalSubwayName, { fontSize: scaleFont(FONT_SIZES.md) }]}>
+                                                        {nearestSubway.line.name}
+                                                    </Text>
+                                                    <Text style={[styles.modalSubwayDetail, { fontSize: scaleFont(FONT_SIZES.sm) }]}>
+                                                        Every {nearestSubway.headway} min · {nearestSubway.period}
+                                                    </Text>
+                                                    <Text style={[styles.modalSubwayHours, { fontSize: scaleFont(FONT_SIZES.sm) }]}>
+                                                        {nearestSubway.line.hours.start} – {nearestSubway.line.hours.end}
+                                                    </Text>
+                                                </View>
+                                            </View>
+                                        ) : loadingDepartures ? (
+                                            <ActivityIndicator style={styles.modalLoader} color={COLORS.line1} />
+                                        ) : stopDepartures.length === 0 ? (
+                                            <Text style={[styles.modalEmpty, { fontSize: scaleFont(FONT_SIZES.sm) }]}>
+                                                No departures in the next 90 min
+                                            </Text>
+                                        ) : (
+                                            stopDepartures.map((dep, idx) => (
+                                                <View key={idx} style={styles.modalDepRow}>
+                                                    <Text style={[styles.modalDepRoute, { fontSize: scaleFont(FONT_SIZES.md) }]} numberOfLines={1}>
+                                                        {dep.routeName}
+                                                    </Text>
+                                                    <Text style={[styles.modalDepTime, { fontSize: scaleFont(FONT_SIZES.md) }]}>
+                                                        {dep.arrivalMins <= 1 ? 'Now' : `${dep.arrivalMins} min`}
+                                                    </Text>
+                                                </View>
+                                            ))
+                                        )}
+
+                                        <TouchableOpacity style={styles.modalClose} onPress={closeStopModal}>
+                                            <Text style={[styles.modalCloseText, { fontSize: scaleFont(FONT_SIZES.sm) }]}>Close</Text>
+                                        </TouchableOpacity>
+                                    </>
+                                )}
+                            </Pressable>
+                        </Pressable>
+                    </Modal>
 
                     {/* Frequent routes chips */}
                     {showContextual && frequentRoutes.length > 0 && (
@@ -556,7 +654,7 @@ const styles = StyleSheet.create({
         color: COLORS.text,
         fontWeight: '500',
     },
-    // Phase 4: Nearby vehicles
+    // Nearby stops
     nearbyContainer: {
         marginBottom: SPACING.md,
     },
@@ -568,31 +666,125 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
-        paddingVertical: SPACING.xs + 2,
+        paddingVertical: SPACING.sm,
         borderBottomWidth: StyleSheet.hairlineWidth,
         borderBottomColor: COLORS.border,
     },
-    nearbyRouteTag: {
-        backgroundColor: '#F5F5F5',
-        paddingHorizontal: SPACING.sm,
-        paddingVertical: SPACING.xs,
-        borderRadius: 8,
+    nearbyStopInfo: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        flex: 1,
+        marginRight: SPACING.sm,
     },
-    nearbyRouteText: {
+    nearbyStopIcon: {
+        marginRight: SPACING.sm,
+    },
+    nearbyStopText: {
+        flex: 1,
+    },
+    nearbyStopName: {
+        fontWeight: '500',
+        color: COLORS.text,
+    },
+    nearbyStopDist: {
+        color: COLORS.textSecondary,
+        marginTop: 1,
+    },
+    nearbyChevron: {
+        color: COLORS.textSecondary,
+        fontSize: 20,
+        fontWeight: '300',
+    },
+    // Stop departure modal
+    modalBackdrop: {
+        flex: 1,
+        backgroundColor: 'rgba(0,0,0,0.45)',
+        justifyContent: 'center',
+        alignItems: 'center',
+        paddingHorizontal: SPACING.xl,
+    },
+    modalCard: {
+        width: '100%',
+        backgroundColor: COLORS.background,
+        borderRadius: 16,
+        padding: SPACING.lg,
+        maxHeight: '70%',
+    },
+    modalHeader: {
+        marginBottom: SPACING.sm,
+    },
+    modalStopName: {
+        fontWeight: '700',
+        color: COLORS.text,
+    },
+    modalStopDist: {
+        color: COLORS.textSecondary,
+        marginTop: 2,
+    },
+    modalDivider: {
+        height: StyleSheet.hairlineWidth,
+        backgroundColor: COLORS.border,
+        marginBottom: SPACING.sm,
+    },
+    modalDepRow: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        paddingVertical: SPACING.sm,
+        borderBottomWidth: StyleSheet.hairlineWidth,
+        borderBottomColor: COLORS.border,
+    },
+    modalDepRoute: {
+        flex: 1,
+        color: COLORS.text,
+        marginRight: SPACING.sm,
+    },
+    modalDepTime: {
+        fontWeight: '700',
+        color: COLORS.line2,
+    },
+    modalSubwayInfo: {
+        flexDirection: 'row',
+        alignItems: 'flex-start',
+        paddingVertical: SPACING.sm,
+        gap: SPACING.sm,
+    },
+    modalSubwayLine: {
+        width: 4,
+        borderRadius: 2,
+        alignSelf: 'stretch',
+        marginTop: 2,
+    },
+    modalSubwayName: {
         fontWeight: '600',
         color: COLORS.text,
     },
-    nearbyEta: {
-        fontWeight: 'bold',
+    modalSubwayDetail: {
+        color: COLORS.text,
+        marginTop: 2,
     },
-    nearbyEtaRealtime: {
-        color: COLORS.line2, // Green — real GTFS-RT prediction
+    modalSubwayHours: {
+        color: COLORS.textSecondary,
+        marginTop: 2,
     },
-    nearbyEtaEstimate: {
-        color: COLORS.textSecondary, // Gray — distance-based estimate
+    modalLoader: {
+        marginVertical: SPACING.lg,
+    },
+    modalEmpty: {
+        color: COLORS.textSecondary,
+        textAlign: 'center',
+        paddingVertical: SPACING.lg,
+    },
+    modalClose: {
+        marginTop: SPACING.md,
+        alignItems: 'center',
+        paddingVertical: SPACING.sm,
+    },
+    modalCloseText: {
+        color: COLORS.textSecondary,
         fontWeight: '500',
     },
-    // Phase 4: Commute nudge
+    // Commute nudge
     commuteNudge: {
         backgroundColor: '#FFFDF0',
         borderWidth: 1,
@@ -606,21 +798,6 @@ const styles = StyleSheet.create({
         color: COLORS.text,
     },
     commuteNudgeDest: {
-        color: COLORS.textSecondary,
-        marginTop: 2,
-    },
-    // Phase 4: Subway info
-    subwayInfoContainer: {
-        borderLeftWidth: 4,
-        paddingLeft: SPACING.sm,
-        paddingVertical: SPACING.xs,
-        marginBottom: SPACING.md,
-    },
-    subwayInfoLine: {
-        fontWeight: '600',
-        color: COLORS.text,
-    },
-    subwayInfoDetail: {
         color: COLORS.textSecondary,
         marginTop: 2,
     },

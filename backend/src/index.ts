@@ -5,6 +5,11 @@ import GtfsRealtimeBindings from 'gtfs-realtime-bindings';
 import polyline from '@mapbox/polyline';
 import * as dotenv from 'dotenv';
 import rateLimit from 'express-rate-limit';
+import stopsData from './data/stops.json';
+
+// Static TTC stop data — updated daily by GitHub Actions (see .github/workflows/update-stops.yml)
+// Shape: { [stopId]: { name: string; lat: number; lon: number } }
+const stopsMap = stopsData as Record<string, { name: string; lat: number; lon: number }>;
 
 dotenv.config();
 
@@ -202,6 +207,65 @@ app.get('/api/nearby', (req, res) => {
     nearby.sort((a, b) => a.distanceMeters - b.distanceMeters);
 
     res.json({ nearby: nearby.slice(0, 10), total: nearby.length });
+});
+
+// ── Nearby Stops Endpoint ─────────────────────────────────
+// Returns TTC stops within `radius` meters of a given lat/lon.
+// Stop coordinates come from the static stops.json, kept fresh by GitHub Actions.
+app.get('/api/stops/nearby', (req, res) => {
+    const lat = parseFloat(req.query.lat as string);
+    const lon = parseFloat(req.query.lon as string);
+    const radius = parseFloat(req.query.radius as string) || 400;
+
+    if (isNaN(lat) || isNaN(lon)) {
+        return res.status(400).json({ error: 'lat and lon are required' });
+    }
+
+    const nearby: { stopId: string; name: string; lat: number; lon: number; distanceMeters: number }[] = [];
+
+    for (const [stopId, stop] of Object.entries(stopsMap)) {
+        const dist = haversineMeters(lat, lon, stop.lat, stop.lon);
+        if (dist <= radius) {
+            nearby.push({ stopId, name: stop.name, lat: stop.lat, lon: stop.lon, distanceMeters: Math.round(dist) });
+        }
+    }
+
+    nearby.sort((a, b) => a.distanceMeters - b.distanceMeters);
+    res.json({ stops: nearby.slice(0, 8) });
+});
+
+// ── Stop Departures Endpoint ──────────────────────────────
+// Returns upcoming arrivals at a specific stop from the live trip updates cache.
+app.get('/api/stops/:stopId/departures', (req, res) => {
+    const { stopId } = req.params;
+    const nowSec = Math.floor(Date.now() / 1000);
+    const departures: { routeId: string; tripId: string; arrivalMins: number; arrivalTime: number }[] = [];
+
+    for (const entity of tripUpdatesCache) {
+        const tu = entity.tripUpdate;
+        if (!tu?.trip?.routeId) continue;
+
+        for (const stu of (tu.stopTimeUpdate || [])) {
+            if (stu.stopId !== stopId) continue;
+
+            const arrTime = stu.arrival?.time?.low || stu.arrival?.time;
+            if (!arrTime || arrTime <= nowSec) continue;
+
+            const arrMins = Math.round((arrTime - nowSec) / 60);
+            if (arrMins > 90) continue; // skip anything more than 90 min out
+
+            departures.push({
+                routeId: tu.trip.routeId,
+                tripId: tu.trip.tripId,
+                arrivalMins: arrMins,
+                arrivalTime: arrTime,
+            });
+            break; // one entry per trip is enough
+        }
+    }
+
+    departures.sort((a, b) => a.arrivalTime - b.arrivalTime);
+    res.json({ stopId, departures: departures.slice(0, 12) });
 });
 
 // ── Service Alerts Endpoint (NEW) ────────────────────────
@@ -694,5 +758,6 @@ app.listen(PORT, '0.0.0.0', () => {
     console.log(`JATA Relay Server running on http://localhost:${PORT}`);
     console.log(`Routing: ${ROUTING_API_URL}`);
     console.log(`Geocoding: ${GEOCODING_API_URL}`);
-    console.log('Endpoints: /api/health, /api/vehicles, /api/nearby, /api/alerts, /api/predictions, /api/directions, /api/search');
+    console.log(`Static stops loaded: ${Object.keys(stopsMap).length} stops`);
+    console.log('Endpoints: /api/health, /api/vehicles, /api/nearby, /api/stops/nearby, /api/stops/:stopId/departures, /api/alerts, /api/predictions, /api/directions, /api/search');
 });
