@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="kiranic">
+  <title>kiranic</title>
+  <rect width="64" height="64" rx="14" fill="#297081"/>
+  <text x="13" y="46" font-family="IBM Plex Mono, ui-monospace, monospace" font-weight="700" font-size="42" fill="#F5F5F4">k</text>
+  <circle cx="46" cy="44" r="4" fill="#E29D35"/>
+</svg>
