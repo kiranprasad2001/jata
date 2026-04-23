@@ -49,9 +49,10 @@ let tripUpdatesCache: any[] = [];
 let lastVehicleFetch: Date | null = null;
 let lastAlertsFetch: Date | null = null;
 let lastTripUpdatesFetch: Date | null = null;
-let isFetchingVehicles = false;
-let isFetchingAlerts = false;
-let isFetchingTripUpdates = false;
+let vehicleFetchPromise: Promise<void> | null = null;
+let alertsFetchPromise: Promise<void> | null = null;
+let tripUpdatesFetchPromise: Promise<void> | null = null;
+let nextbusIndexBuildPromise: Promise<void> | null = null;
 
 // NextBus stop index: maps GTFS stopId → { NextBus tag, route tags[] }
 let nextbusIndex = new Map<string, { tag: string; routes: string[] }>();
@@ -70,139 +71,173 @@ function haversineMeters(lat1: number, lon1: number, lat2: number, lon2: number)
 }
 
 // ── Polling: Vehicle Positions (every 15s) ───────────────
-const updateVehicleCache = async () => {
-    if (isFetchingVehicles) return;
-    isFetchingVehicles = true;
+const updateVehicleCache = (): Promise<void> => {
+    if (vehicleFetchPromise) return vehicleFetchPromise;
+    vehicleFetchPromise = (async () => {
+        try {
+            console.log(`[${new Date().toISOString()}] Fetching TTC vehicle positions...`);
+            const response = await axios.get(TTC_VEHICLE_POSITIONS_URL, {
+                responseType: 'arraybuffer',
+                timeout: 10000
+            });
 
-    try {
-        console.log(`[${new Date().toISOString()}] Fetching TTC vehicle positions...`);
-        const response = await axios.get(TTC_VEHICLE_POSITIONS_URL, {
-            responseType: 'arraybuffer',
-            timeout: 10000
-        });
-
-        // @ts-ignore
-        const feed = GtfsRealtimeBindings.transit_realtime.FeedMessage.decode(new Uint8Array(response.data));
-        vehicleCache = feed.entity;
-        lastVehicleFetch = new Date();
-        console.log(`Cached ${vehicleCache.length} vehicles.`);
-    } catch (error: any) {
-        console.error("Error fetching vehicles:", error.message);
-    } finally {
-        isFetchingVehicles = false;
-    }
+            // @ts-ignore
+            const feed = GtfsRealtimeBindings.transit_realtime.FeedMessage.decode(new Uint8Array(response.data));
+            if (!feed?.entity || !Array.isArray(feed.entity) || feed.entity.length === 0) {
+                console.warn('[Vehicles] Upstream returned empty/invalid feed; keeping previous cache.');
+                return;
+            }
+            vehicleCache = feed.entity;
+            lastVehicleFetch = new Date();
+            console.log(`Cached ${vehicleCache.length} vehicles.`);
+        } catch (error: any) {
+            console.error("Error fetching vehicles:", error.message);
+        }
+    })().finally(() => { vehicleFetchPromise = null; });
+    return vehicleFetchPromise;
 };
 
 // ── Polling: Service Alerts (every 60s) ──────────────────
-const updateAlertsCache = async () => {
-    if (isFetchingAlerts) return;
-    isFetchingAlerts = true;
+const updateAlertsCache = (): Promise<void> => {
+    if (alertsFetchPromise) return alertsFetchPromise;
+    alertsFetchPromise = (async () => {
+        try {
+            console.log(`[${new Date().toISOString()}] Fetching TTC service alerts...`);
+            const response = await axios.get(TTC_SERVICE_ALERTS_URL, {
+                responseType: 'arraybuffer',
+                timeout: 10000
+            });
 
-    try {
-        console.log(`[${new Date().toISOString()}] Fetching TTC service alerts...`);
-        const response = await axios.get(TTC_SERVICE_ALERTS_URL, {
-            responseType: 'arraybuffer',
-            timeout: 10000
-        });
-
-        // @ts-ignore
-        const feed = GtfsRealtimeBindings.transit_realtime.FeedMessage.decode(new Uint8Array(response.data));
-        alertsCache = feed.entity;
-        lastAlertsFetch = new Date();
-        console.log(`Cached ${alertsCache.length} service alerts.`);
-    } catch (error: any) {
-        console.error("Error fetching alerts:", error.message);
-    } finally {
-        isFetchingAlerts = false;
-    }
+            // @ts-ignore
+            const feed = GtfsRealtimeBindings.transit_realtime.FeedMessage.decode(new Uint8Array(response.data));
+            // Alerts feed may legitimately be empty (no active disruptions) — accept [] but reject malformed.
+            if (!feed?.entity || !Array.isArray(feed.entity)) {
+                console.warn('[Alerts] Upstream returned invalid feed; keeping previous cache.');
+                return;
+            }
+            alertsCache = feed.entity;
+            lastAlertsFetch = new Date();
+            console.log(`Cached ${alertsCache.length} service alerts.`);
+        } catch (error: any) {
+            console.error("Error fetching alerts:", error.message);
+        }
+    })().finally(() => { alertsFetchPromise = null; });
+    return alertsFetchPromise;
 };
 
 // ── Polling: Trip Updates (every 30s) ────────────────────
-const updateTripUpdatesCache = async () => {
-    if (isFetchingTripUpdates) return;
-    isFetchingTripUpdates = true;
+const updateTripUpdatesCache = (): Promise<void> => {
+    if (tripUpdatesFetchPromise) return tripUpdatesFetchPromise;
+    tripUpdatesFetchPromise = (async () => {
+        try {
+            console.log(`[${new Date().toISOString()}] Fetching TTC trip updates...`);
+            const response = await axios.get(TTC_TRIP_UPDATES_URL, {
+                responseType: 'arraybuffer',
+                timeout: 10000
+            });
 
-    try {
-        console.log(`[${new Date().toISOString()}] Fetching TTC trip updates...`);
-        const response = await axios.get(TTC_TRIP_UPDATES_URL, {
-            responseType: 'arraybuffer',
-            timeout: 10000
-        });
-
-        // @ts-ignore
-        const feed = GtfsRealtimeBindings.transit_realtime.FeedMessage.decode(new Uint8Array(response.data));
-        tripUpdatesCache = feed.entity;
-        lastTripUpdatesFetch = new Date();
-        console.log(`Cached ${tripUpdatesCache.length} trip updates.`);
-    } catch (error: any) {
-        console.error("Error fetching trip updates:", error.message);
-    } finally {
-        isFetchingTripUpdates = false;
-    }
+            // @ts-ignore
+            const feed = GtfsRealtimeBindings.transit_realtime.FeedMessage.decode(new Uint8Array(response.data));
+            if (!feed?.entity || !Array.isArray(feed.entity) || feed.entity.length === 0) {
+                console.warn('[TripUpdates] Upstream returned empty/invalid feed; keeping previous cache.');
+                return;
+            }
+            tripUpdatesCache = feed.entity;
+            lastTripUpdatesFetch = new Date();
+            console.log(`Cached ${tripUpdatesCache.length} trip updates.`);
+        } catch (error: any) {
+            console.error("Error fetching trip updates:", error.message);
+        }
+    })().finally(() => { tripUpdatesFetchPromise = null; });
+    return tripUpdatesFetchPromise;
 };
 
 // ── Build NextBus Stop Index (background, on startup + every 6h) ──
 // Maps each GTFS stop_id to its NextBus tag and which route tags serve it.
 // This enables simple predictions via retro.umoiq.com predictionsForMultiStops.
-const buildNextbusIndex = async () => {
-    try {
-        console.log(`[${new Date().toISOString()}] Building NextBus stop index...`);
+const buildNextbusIndex = (): Promise<void> => {
+    if (nextbusIndexBuildPromise) return nextbusIndexBuildPromise;
+    nextbusIndexBuildPromise = (async () => {
+        let tempIndex: Map<string, { tag: string; routes: Set<string> }> | null = null;
+        try {
+            console.log(`[${new Date().toISOString()}] Building NextBus stop index...`);
 
-        // Step 1: Get all TTC route tags
-        const routeListResp = await axios.get(NEXTBUS_API_URL, {
-            params: { command: 'routeList', a: NEXTBUS_AGENCY },
-            timeout: 15000,
-        });
-        let routes = routeListResp.data?.route || [];
-        if (!Array.isArray(routes)) routes = [routes]; // single route edge case
+            // Step 1: Get all TTC route tags
+            const routeListResp = await axios.get(NEXTBUS_API_URL, {
+                params: { command: 'routeList', a: NEXTBUS_AGENCY },
+                timeout: 15000,
+            });
+            let routes = routeListResp.data?.route || [];
+            if (!Array.isArray(routes)) routes = [routes]; // single route edge case
 
-        console.log(`[NextBus] Found ${routes.length} routes, fetching configs...`);
+            if (routes.length === 0) {
+                console.warn('[NextBus] routeList returned no routes; keeping previous index.');
+                return;
+            }
 
-        // Step 2: Fetch routeConfig for each route in parallel batches
-        const tempIndex = new Map<string, { tag: string; routes: Set<string> }>();
-        const BATCH_SIZE = 15;
+            console.log(`[NextBus] Found ${routes.length} routes, fetching configs...`);
 
-        for (let i = 0; i < routes.length; i += BATCH_SIZE) {
-            const batch = routes.slice(i, i + BATCH_SIZE);
-            await Promise.all(batch.map(async (route: any) => {
-                const routeTag = route.tag;
-                try {
-                    const resp = await axios.get(NEXTBUS_API_URL, {
-                        params: { command: 'routeConfig', a: NEXTBUS_AGENCY, r: routeTag },
-                        timeout: 10000,
-                    });
+            // Step 2: Fetch routeConfig for each route in parallel batches
+            tempIndex = new Map<string, { tag: string; routes: Set<string> }>();
+            const BATCH_SIZE = 15;
+            let successfulRoutes = 0;
 
-                    let stops = resp.data?.route?.stop || [];
-                    if (!Array.isArray(stops)) stops = [stops];
+            for (let i = 0; i < routes.length; i += BATCH_SIZE) {
+                const batch = routes.slice(i, i + BATCH_SIZE);
+                const results = await Promise.all(batch.map(async (route: any) => {
+                    const routeTag = route.tag;
+                    try {
+                        const resp = await axios.get(NEXTBUS_API_URL, {
+                            params: { command: 'routeConfig', a: NEXTBUS_AGENCY, r: routeTag },
+                            timeout: 10000,
+                        });
 
-                    for (const stop of stops) {
-                        if (!stop.stopId || !stop.tag) continue;
-                        const existing = tempIndex.get(stop.stopId);
-                        if (existing) {
-                            existing.routes.add(routeTag);
-                        } else {
-                            tempIndex.set(stop.stopId, { tag: stop.tag, routes: new Set([routeTag]) });
+                        let stops = resp.data?.route?.stop || [];
+                        if (!Array.isArray(stops)) stops = [stops];
+
+                        for (const stop of stops) {
+                            if (!stop.stopId || !stop.tag) continue;
+                            const existing = tempIndex!.get(stop.stopId);
+                            if (existing) {
+                                existing.routes.add(routeTag);
+                            } else {
+                                tempIndex!.set(stop.stopId, { tag: stop.tag, routes: new Set([routeTag]) });
+                            }
                         }
+                        return true;
+                    } catch (e: any) {
+                        console.warn(`[NextBus] routeConfig failed for r=${routeTag}: ${e.message}`);
+                        return false;
                     }
-                } catch (e: any) {
-                    console.warn(`[NextBus] routeConfig failed for r=${routeTag}: ${e.message}`);
-                }
-            }));
-        }
+                }));
+                successfulRoutes += results.filter(Boolean).length;
+            }
 
-        // Convert Sets → arrays and store
-        const newIndex = new Map<string, { tag: string; routes: string[] }>();
-        for (const [stopId, data] of tempIndex) {
-            newIndex.set(stopId, { tag: data.tag, routes: Array.from(data.routes) });
-        }
+            // Only swap in the new index if we got a meaningful fraction of routes.
+            // Protects against partial outages that would otherwise replace a good index with a near-empty one.
+            const successRatio = successfulRoutes / routes.length;
+            if (successRatio < 0.5 && nextbusIndexReady) {
+                console.warn(`[NextBus] Only ${successfulRoutes}/${routes.length} routes built (${Math.round(successRatio * 100)}%); keeping previous index.`);
+                return;
+            }
 
-        nextbusIndex = newIndex;
-        nextbusIndexReady = true;
-        lastNextbusIndexBuild = new Date();
-        console.log(`[NextBus] Index built: ${nextbusIndex.size} stops mapped across ${routes.length} routes`);
-    } catch (e: any) {
-        console.error(`[NextBus] Failed to build index: ${e.message}`);
-    }
+            const newIndex = new Map<string, { tag: string; routes: string[] }>();
+            for (const [stopId, data] of tempIndex) {
+                newIndex.set(stopId, { tag: data.tag, routes: Array.from(data.routes) });
+            }
+
+            nextbusIndex = newIndex;
+            nextbusIndexReady = true;
+            lastNextbusIndexBuild = new Date();
+            console.log(`[NextBus] Index built: ${nextbusIndex.size} stops mapped across ${successfulRoutes}/${routes.length} routes`);
+        } catch (e: any) {
+            console.error(`[NextBus] Failed to build index: ${e.message}`);
+        } finally {
+            // Drop the large intermediate map so GC can reclaim it regardless of outcome.
+            tempIndex = null;
+        }
+    })().finally(() => { nextbusIndexBuildPromise = null; });
+    return nextbusIndexBuildPromise;
 };
 
 // Start polling
@@ -466,7 +501,17 @@ app.get('/api/stops/:stopId/departures', async (req, res) => {
 app.get('/api/alerts', (req, res) => {
     const routeFilter = req.query.routes as string; // comma-separated route IDs
 
-    const alerts = alertsCache.map(entity => {
+    // Deduplicate upstream entities by id first — GTFS-RT occasionally emits repeats.
+    const seenEntityIds = new Set<string>();
+    const uniqueEntities = alertsCache.filter((entity: any) => {
+        const id = entity?.id;
+        if (!id) return true; // keep anonymous entities (rare); dedupe below on content
+        if (seenEntityIds.has(id)) return false;
+        seenEntityIds.add(id);
+        return true;
+    });
+
+    const alerts = uniqueEntities.map(entity => {
         const alert = entity.alert;
         if (!alert) return null;
 
@@ -502,17 +547,27 @@ app.get('/api/alerts', (req, res) => {
         };
     }).filter(Boolean);
 
+    // Second pass: dedupe by content (same header+description+route set) —
+    // catches cases where upstream assigns different entity ids to the same alert.
+    const seenContent = new Set<string>();
+    const dedupedAlerts = alerts.filter((a: any) => {
+        const key = `${a.headerText}|${a.descriptionText}|${[...a.affectedRouteIds].sort().join(',')}`;
+        if (seenContent.has(key)) return false;
+        seenContent.add(key);
+        return true;
+    });
+
     // Filter by routes if specified
     if (routeFilter) {
         const filterIds = routeFilter.split(',');
-        const filtered = alerts.filter((a: any) =>
+        const filtered = dedupedAlerts.filter((a: any) =>
             a.affectedRouteIds.length === 0 || // System-wide alerts always included
             a.affectedRouteIds.some((id: string) => filterIds.includes(id))
         );
         return res.json({ alerts: filtered });
     }
 
-    res.json({ alerts });
+    res.json({ alerts: dedupedAlerts });
 });
 
 // ── Trip Updates Endpoint (NEW) ──────────────────────────

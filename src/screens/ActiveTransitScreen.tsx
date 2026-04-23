@@ -87,17 +87,34 @@ export default function ActiveTransitScreen() {
         loadCachedIfNeeded();
     }, []);
 
-    // Compute arrival time on mount
+    // Compute arrival time on mount.
+    // Prefer the absolute arrival timestamp from the last transit leg (set when the route was planned)
+    // so that cached routes loaded later don't display a time extrapolated from "now".
+    // If that timestamp is stale (already passed or way in the past), fall back to now + totalTimeValue.
     useEffect(() => {
-        const arrivalMs = Date.now() + routeData.totalTimeValue * 1000;
-        const arrivalDate = new Date(arrivalMs);
+        const nowSec = Math.floor(Date.now() / 1000);
+        let arrivalSec: number | null = null;
+
+        for (let i = routeData.steps.length - 1; i >= 0; i--) {
+            const td = routeData.steps[i]?.transitDetails;
+            if (td?.arrivalTimeValue && td.arrivalTimeValue > nowSec) {
+                arrivalSec = td.arrivalTimeValue;
+                break;
+            }
+        }
+
+        if (arrivalSec === null) {
+            arrivalSec = nowSec + (routeData.totalTimeValue || 0);
+        }
+
+        const arrivalDate = new Date(arrivalSec * 1000);
         const hours = arrivalDate.getHours();
         const minutes = arrivalDate.getMinutes();
         const ampm = hours >= 12 ? 'PM' : 'AM';
         const displayHour = hours % 12 || 12;
         const displayMin = minutes < 10 ? `0${minutes}` : minutes;
         setArrivalTime(`${displayHour}:${displayMin} ${ampm}`);
-    }, [routeData.totalTimeValue]);
+    }, [routeData]);
 
     useEffect(() => {
         let locationSubscription: Location.LocationSubscription | null = null;
