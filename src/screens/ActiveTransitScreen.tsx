@@ -156,13 +156,21 @@ export default function ActiveTransitScreen() {
                     const currentStep = routeData.steps[stepIdx];
                     if (currentStep.travelMode === 'TRANSIT' && currentStep.transitDetails) {
                         const td = currentStep.transitDetails;
-                        if (td.departureTimeValue && td.arrivalTimeValue && td.numStops) {
+                        // Require a positive-length window and >=1 stop so progress math can't produce NaN/Infinity.
+                        if (
+                            td.departureTimeValue &&
+                            td.arrivalTimeValue &&
+                            td.numStops && td.numStops > 0 &&
+                            td.arrivalTimeValue > td.departureTimeValue
+                        ) {
                             const nowSec = Date.now() / 1000;
                             const totalDuration = td.arrivalTimeValue - td.departureTimeValue;
                             const elapsed = nowSec - td.departureTimeValue;
                             const progress = Math.max(0, Math.min(1, elapsed / totalDuration));
                             const remaining = Math.max(0, td.numStops - Math.floor(progress * td.numStops));
                             setStopsRemaining(remaining);
+                        } else {
+                            setStopsRemaining(null);
                         }
                     } else {
                         setStopsRemaining(null);

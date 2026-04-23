@@ -59,6 +59,12 @@ let nextbusIndex = new Map<string, { tag: string; routes: string[] }>();
 let nextbusIndexReady = false;
 let lastNextbusIndexBuild: Date | null = null;
 
+// Validates a lat/lon pair: finite numbers within earth coordinate bounds.
+function isValidLatLon(lat: number, lon: number): boolean {
+    return Number.isFinite(lat) && Number.isFinite(lon) &&
+        Math.abs(lat) <= 90 && Math.abs(lon) <= 180;
+}
+
 // ── Haversine distance (meters) ──────────────────────────
 function haversineMeters(lat1: number, lon1: number, lat2: number, lon2: number): number {
     const R = 6371000;
@@ -284,10 +290,11 @@ app.get('/api/vehicles', (req, res) => {
 app.get('/api/nearby', (req, res) => {
     const lat = parseFloat(req.query.lat as string);
     const lon = parseFloat(req.query.lon as string);
-    const radius = parseFloat(req.query.radius as string) || 800;
+    const rawRadius = parseFloat(req.query.radius as string);
+    const radius = Number.isFinite(rawRadius) && rawRadius > 0 ? Math.min(rawRadius, 5000) : 800;
 
-    if (isNaN(lat) || isNaN(lon)) {
-        return res.status(400).json({ error: 'lat and lon are required' });
+    if (!isValidLatLon(lat, lon)) {
+        return res.status(400).json({ error: 'lat and lon must be valid earth coordinates' });
     }
 
     const nearby: any[] = [];
@@ -326,10 +333,11 @@ app.get('/api/nearby', (req, res) => {
 app.get('/api/stops/nearby', (req, res) => {
     const lat = parseFloat(req.query.lat as string);
     const lon = parseFloat(req.query.lon as string);
-    const radius = parseFloat(req.query.radius as string) || 400;
+    const rawRadius = parseFloat(req.query.radius as string);
+    const radius = Number.isFinite(rawRadius) && rawRadius > 0 ? Math.min(rawRadius, 2000) : 400;
 
-    if (isNaN(lat) || isNaN(lon)) {
-        return res.status(400).json({ error: 'lat and lon are required' });
+    if (!isValidLatLon(lat, lon)) {
+        return res.status(400).json({ error: 'lat and lon must be valid earth coordinates' });
     }
 
     const nearby: { stopId: string; name: string; lat: number; lon: number; distanceMeters: number }[] = [];
@@ -950,8 +958,11 @@ app.post('/api/directions', async (req, res) => {
 // If googleApiKey is present, uses Google Places. Otherwise, Photon.
 app.get('/api/search', async (req, res) => {
     const query = req.query.q as string;
-    const lat = parseFloat(req.query.lat as string) || 43.6532;
-    const lon = parseFloat(req.query.lon as string) || -79.3832;
+    const rawLat = parseFloat(req.query.lat as string);
+    const rawLon = parseFloat(req.query.lon as string);
+    // Bias search toward user's location only if the coords are valid; fall back to downtown Toronto.
+    const lat = isValidLatLon(rawLat, rawLon) ? rawLat : 43.6532;
+    const lon = isValidLatLon(rawLat, rawLon) ? rawLon : -79.3832;
     const googleApiKey = req.query.googleApiKey as string;
 
     if (!query || query.length < 2) {
