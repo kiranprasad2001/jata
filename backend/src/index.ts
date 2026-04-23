@@ -854,7 +854,12 @@ app.post('/api/directions', async (req, res) => {
             timeout: 15000,
         });
 
-        const itineraries = motisResp.data?.itineraries || [];
+        // Validate shape — upstream has historically used both `itineraries` and (during schema changes) `itinerary`.
+        let itineraries = motisResp.data?.itineraries ?? motisResp.data?.itinerary ?? [];
+        if (!Array.isArray(itineraries)) {
+            console.warn('[MOTIS] itineraries field was not an array; coercing to empty.');
+            itineraries = [];
+        }
 
         // Transform MOTIS itineraries → TransitRoute[]
         const routes = itineraries.map((itin: any) => {

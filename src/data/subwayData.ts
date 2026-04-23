@@ -42,12 +42,14 @@ export function getCurrentHeadway(line: SubwayLine): { minutes: number; period: 
     if (isWeekend) {
         return { minutes: line.headways.weekend, period: 'Weekend' };
     }
-    if ((hour >= 7 && hour < 9) || (hour >= 16 && hour < 19)) {
+    // TTC PM rush is closer to 16:00–19:30; round to 20 so 19:00–19:59 is treated as peak.
+    if ((hour >= 7 && hour < 9) || (hour >= 16 && hour < 20)) {
         return { minutes: line.headways.peak, period: 'Rush hour' };
     }
     if (hour >= 9 && hour < 16) {
         return { minutes: line.headways.midday, period: 'Midday' };
     }
+    // Covers 6–7 AM (early service) and 20:00–23:00 (evening).
     return { minutes: line.headways.evening, period: 'Evening' };
 }
 

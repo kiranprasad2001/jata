@@ -51,7 +51,8 @@ export async function fetchStopDepartures(stopId: string): Promise<StopDeparture
             routeId: d.routeId,
             routeName: d.routeTitle || `Route ${d.routeId}`,
             arrivalMins: d.arrivalMins,
-            isRealtime: d.isRealtime ?? true,
+            // Default to false so distance-fallback estimates are not displayed as real predictions.
+            isRealtime: d.isRealtime === true,
             direction: d.direction || '',
         }));
     } catch {

@@ -320,8 +320,10 @@ export default function ActiveTransitScreen() {
             const vType = currentStep.transitDetails.vehicleType;
             if (vType?.includes('SUBWAY')) {
                 const stationName = currentStep.transitDetails.departureStop;
-                // Look up from static subway data
-                const nearest = findNearestStation(43.6532, -79.3832); // Default Toronto coords
+                // Prefer the user's current location; fall back to downtown Toronto only if GPS hasn't fixed yet.
+                const searchLat = userLocation?.latitude ?? 43.6532;
+                const searchLon = userLocation?.longitude ?? -79.3832;
+                const nearest = findNearestStation(searchLat, searchLon);
                 if (nearest) {
                     const { minutes, period } = getCurrentHeadway(nearest.line);
                     if (minutes > 0) {
@@ -332,10 +334,11 @@ export default function ActiveTransitScreen() {
                 setSubwayOfflineInfo(null);
             }
         }
-    }, [currentStepIndex, routeData.steps]);
+    }, [currentStepIndex, routeData.steps, userLocation]);
 
-    const scaleFont = (size: number) => isAccessibilityMode ? size * 1.2 : size;
-    const scaleSpacing = (size: number) => isAccessibilityMode ? size * 1.5 : size;
+    // Cap upper bound so downstream scaling (OS-level a11y text size) doesn't compound into broken layouts.
+    const scaleFont = (size: number) => isAccessibilityMode ? Math.min(size * 1.2, 32) : size;
+    const scaleSpacing = (size: number) => isAccessibilityMode ? Math.min(size * 1.5, 48) : size;
 
     // Feature 5: Get entrance hint from walking step or lookup table
     const getEntranceHint = (stationName: string, stepIndex: number): string | null => {
