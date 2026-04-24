@@ -174,8 +174,8 @@ export async function fetchNearbyVehicles(
         })
             .sort((a, b) => a.estimatedArrivalMins - b.estimatedArrivalMins)
             .slice(0, 4); // Show at most 4 nearby vehicles
-    } catch (error) {
-        console.warn('[JATA] Failed to fetch nearby vehicles:', error);
+    } catch (error: any) {
+        console.warn('[JATA] Failed to fetch nearby vehicles:', error?.message || error);
         return [];
     }
 }

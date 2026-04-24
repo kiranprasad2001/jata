@@ -167,8 +167,8 @@ export async function getNextCommute(): Promise<CommutePattern | null> {
         .filter(p => p.dayOfWeek === today)
         .filter(p => {
             const patternMinutes = p.avgHour * 60 + p.avgMinute;
-            // Pattern is 10-60 min from now
-            return patternMinutes > nowMinutes + 10 && patternMinutes <= nowMinutes + 60;
+            // Any pattern in the next hour that hasn't already started.
+            return patternMinutes > nowMinutes && patternMinutes <= nowMinutes + 60;
         })
         .sort((a, b) => {
             const aMin = a.avgHour * 60 + a.avgMinute;

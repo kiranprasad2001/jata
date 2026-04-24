@@ -87,17 +87,34 @@ export default function ActiveTransitScreen() {
         loadCachedIfNeeded();
     }, []);
 
-    // Compute arrival time on mount
+    // Compute arrival time on mount.
+    // Prefer the absolute arrival timestamp from the last transit leg (set when the route was planned)
+    // so that cached routes loaded later don't display a time extrapolated from "now".
+    // If that timestamp is stale (already passed or way in the past), fall back to now + totalTimeValue.
     useEffect(() => {
-        const arrivalMs = Date.now() + routeData.totalTimeValue * 1000;
-        const arrivalDate = new Date(arrivalMs);
+        const nowSec = Math.floor(Date.now() / 1000);
+        let arrivalSec: number | null = null;
+
+        for (let i = routeData.steps.length - 1; i >= 0; i--) {
+            const td = routeData.steps[i]?.transitDetails;
+            if (td?.arrivalTimeValue && td.arrivalTimeValue > nowSec) {
+                arrivalSec = td.arrivalTimeValue;
+                break;
+            }
+        }
+
+        if (arrivalSec === null) {
+            arrivalSec = nowSec + (routeData.totalTimeValue || 0);
+        }
+
+        const arrivalDate = new Date(arrivalSec * 1000);
         const hours = arrivalDate.getHours();
         const minutes = arrivalDate.getMinutes();
         const ampm = hours >= 12 ? 'PM' : 'AM';
         const displayHour = hours % 12 || 12;
         const displayMin = minutes < 10 ? `0${minutes}` : minutes;
         setArrivalTime(`${displayHour}:${displayMin} ${ampm}`);
-    }, [routeData.totalTimeValue]);
+    }, [routeData]);
 
     useEffect(() => {
         let locationSubscription: Location.LocationSubscription | null = null;
@@ -121,8 +138,6 @@ export default function ActiveTransitScreen() {
                     distanceInterval: LOCATION_SETTINGS.TRACKING_OPTIONS.distanceInterval,
                 },
                 (location) => {
-                    console.log(`[JATA] Location update: ${location.coords.latitude}, ${location.coords.longitude}`);
-
                     setUserLocation({
                         latitude: location.coords.latitude,
                         longitude: location.coords.longitude,
@@ -139,13 +154,21 @@ export default function ActiveTransitScreen() {
                     const currentStep = routeData.steps[stepIdx];
                     if (currentStep.travelMode === 'TRANSIT' && currentStep.transitDetails) {
                         const td = currentStep.transitDetails;
-                        if (td.departureTimeValue && td.arrivalTimeValue && td.numStops) {
+                        // Require a positive-length window and >=1 stop so progress math can't produce NaN/Infinity.
+                        if (
+                            td.departureTimeValue &&
+                            td.arrivalTimeValue &&
+                            td.numStops && td.numStops > 0 &&
+                            td.arrivalTimeValue > td.departureTimeValue
+                        ) {
                             const nowSec = Date.now() / 1000;
                             const totalDuration = td.arrivalTimeValue - td.departureTimeValue;
                             const elapsed = nowSec - td.departureTimeValue;
                             const progress = Math.max(0, Math.min(1, elapsed / totalDuration));
                             const remaining = Math.max(0, td.numStops - Math.floor(progress * td.numStops));
                             setStopsRemaining(remaining);
+                        } else {
+                            setStopsRemaining(null);
                         }
                     } else {
                         setStopsRemaining(null);
@@ -303,8 +326,10 @@ export default function ActiveTransitScreen() {
             const vType = currentStep.transitDetails.vehicleType;
             if (vType?.includes('SUBWAY')) {
                 const stationName = currentStep.transitDetails.departureStop;
-                // Look up from static subway data
-                const nearest = findNearestStation(43.6532, -79.3832); // Default Toronto coords
+                // Prefer the user's current location; fall back to downtown Toronto only if GPS hasn't fixed yet.
+                const searchLat = userLocation?.latitude ?? 43.6532;
+                const searchLon = userLocation?.longitude ?? -79.3832;
+                const nearest = findNearestStation(searchLat, searchLon);
                 if (nearest) {
                     const { minutes, period } = getCurrentHeadway(nearest.line);
                     if (minutes > 0) {
@@ -315,10 +340,11 @@ export default function ActiveTransitScreen() {
                 setSubwayOfflineInfo(null);
             }
         }
-    }, [currentStepIndex, routeData.steps]);
+    }, [currentStepIndex, routeData.steps, userLocation]);
 
-    const scaleFont = (size: number) => isAccessibilityMode ? size * 1.2 : size;
-    const scaleSpacing = (size: number) => isAccessibilityMode ? size * 1.5 : size;
+    // Cap upper bound so downstream scaling (OS-level a11y text size) doesn't compound into broken layouts.
+    const scaleFont = (size: number) => isAccessibilityMode ? Math.min(size * 1.2, 32) : size;
+    const scaleSpacing = (size: number) => isAccessibilityMode ? Math.min(size * 1.5, 48) : size;
 
     // Feature 5: Get entrance hint from walking step or lookup table
     const getEntranceHint = (stationName: string, stepIndex: number): string | null => {
