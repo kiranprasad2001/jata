@@ -948,8 +948,11 @@ app.post('/api/directions', async (req, res) => {
 
         res.json({ routes });
     } catch (error: any) {
-        console.error('[JATA] Directions error:', error.message);
-        res.status(502).json({ error: 'Failed to fetch transit directions', details: error.message });
+        // Strip the error message of anything that looks like a coordinate pair before logging,
+        // so user-supplied origin/destination doesn't end up in server logs.
+        const redacted = (error.message || '').replace(/-?\d+\.\d+\s*,\s*-?\d+\.\d+/g, '[coord]');
+        console.error('[JATA] Directions error:', redacted);
+        res.status(502).json({ error: 'Failed to fetch transit directions' });
     }
 });
 
@@ -1013,7 +1016,9 @@ app.get('/api/search', async (req, res) => {
 
         res.json({ predictions });
     } catch (error: any) {
-        console.error('[JATA] Search error:', error.message);
+        // Redact possible coordinates from the error message before logging.
+        const redacted = (error.message || '').replace(/-?\d+\.\d+\s*,\s*-?\d+\.\d+/g, '[coord]');
+        console.error('[JATA] Search error:', redacted);
         res.json({ predictions: [] });
     }
 });

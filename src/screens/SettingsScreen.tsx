@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, Switch, StyleSheet, TouchableOpacity, TextInput, ScrollView, Alert } from 'react-native';
+import { View, Text, Switch, StyleSheet, TouchableOpacity, TextInput, ScrollView, Alert, Share } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { COLORS, SPACING, FONT_SIZES } from '../constants/theme';
 import { getBoolean, saveToStorage, getString, getObject } from '../utils/storage';
@@ -92,6 +92,75 @@ export default function SettingsScreen() {
     const handleSaveGoogleApiKey = async (val: string) => {
         setGoogleApiKeyState(val);
         await setGoogleApiKey(val);
+    };
+
+    // Export & Import — on-device backup so reinstalls don't erase preferences.
+    // Keys kept in sync with AsyncStorage schema documented in CLAUDE.md.
+    const EXPORT_KEYS = [
+        'home_stop',
+        'work_stop',
+        'custom_locations',
+        'accessibility_mode',
+        'route_history',
+        'commute_departures',
+        'commute_patterns',
+    ] as const;
+
+    const [importText, setImportText] = useState('');
+    const [showImport, setShowImport] = useState(false);
+
+    const handleExport = async () => {
+        const payload: Record<string, unknown> = { _app: 'jata', _version: 1, _exportedAt: Date.now() };
+        for (const key of EXPORT_KEYS) {
+            const obj = await getObject<unknown>(key);
+            if (obj !== undefined) {
+                payload[key] = obj;
+                continue;
+            }
+            const str = await getString(key);
+            if (str !== undefined) payload[key] = str;
+            const bool = await getBoolean(key);
+            if (bool !== undefined) payload[key] = bool;
+        }
+        try {
+            await Share.share({ message: JSON.stringify(payload, null, 2) });
+        } catch (e: any) {
+            Alert.alert('Export Failed', e?.message || 'Could not open share sheet.');
+        }
+    };
+
+    const handleImport = async () => {
+        if (!importText.trim()) {
+            Alert.alert('Nothing to Import', 'Paste an exported JSON backup first.');
+            return;
+        }
+        let data: Record<string, unknown>;
+        try {
+            data = JSON.parse(importText);
+        } catch {
+            Alert.alert('Invalid JSON', 'Could not parse the pasted text as JSON.');
+            return;
+        }
+        if (data._app !== 'jata') {
+            Alert.alert('Wrong File', 'This does not look like a JATA backup.');
+            return;
+        }
+
+        for (const key of EXPORT_KEYS) {
+            if (!(key in data)) continue;
+            const value = data[key];
+            if (value === null || value === undefined) continue;
+            await saveToStorage(key, value as any);
+        }
+
+        // Re-read into UI state so changes are visible immediately.
+        setIsAccessibilityMode((await getBoolean('accessibility_mode')) ?? false);
+        setHomeStop((await getString('home_stop')) || '');
+        setWorkStop((await getString('work_stop')) || '');
+        setCustomLocations((await getObject<CustomLocation[]>('custom_locations')) || []);
+        setImportText('');
+        setShowImport(false);
+        Alert.alert('Imported', 'Your preferences were restored.');
     };
 
     return (
@@ -272,6 +341,66 @@ export default function SettingsScreen() {
                             Optional. Enables Google Maps, Places, and Directions instead of free alternatives.
                         </Text>
                     </View>
+                </View>
+
+                <View style={[styles.section, { marginTop: scaleSpacing(SPACING.xl) }]}>
+                    <Text style={[styles.sectionTitle, { fontSize: scaleFont(FONT_SIZES.lg) }]}>Backup & Restore</Text>
+                    <Text style={{ fontSize: scaleFont(FONT_SIZES.sm), color: COLORS.textSecondary, marginBottom: scaleSpacing(SPACING.sm) }}>
+                        Your data lives only on this device. Export a backup before reinstalling.
+                    </Text>
+
+                    <TouchableOpacity
+                        style={[styles.addBtn, { padding: scaleSpacing(SPACING.sm), backgroundColor: COLORS.line2, marginTop: scaleSpacing(SPACING.sm) }]}
+                        onPress={handleExport}
+                        accessibilityRole="button"
+                        accessibilityLabel="Export preferences as JSON"
+                    >
+                        <Text style={{ color: COLORS.background, fontWeight: 'bold', textAlign: 'center', fontSize: scaleFont(FONT_SIZES.md) }}>Export as JSON…</Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                        style={[styles.addBtn, { padding: scaleSpacing(SPACING.sm), backgroundColor: '#F0F0F0', marginTop: scaleSpacing(SPACING.sm) }]}
+                        onPress={() => setShowImport(v => !v)}
+                        accessibilityRole="button"
+                        accessibilityLabel="Toggle import panel"
+                    >
+                        <Text style={{ color: COLORS.text, fontWeight: 'bold', textAlign: 'center', fontSize: scaleFont(FONT_SIZES.md) }}>
+                            {showImport ? 'Cancel Import' : 'Import from JSON…'}
+                        </Text>
+                    </TouchableOpacity>
+
+                    {showImport && (
+                        <View style={{ marginTop: scaleSpacing(SPACING.sm) }}>
+                            <TextInput
+                                style={[
+                                    styles.input,
+                                    {
+                                        fontSize: scaleFont(FONT_SIZES.sm),
+                                        padding: scaleSpacing(SPACING.sm),
+                                        borderColor: isAccessibilityMode ? COLORS.text : COLORS.border,
+                                        minHeight: 120,
+                                        textAlignVertical: 'top',
+                                    },
+                                ]}
+                                value={importText}
+                                onChangeText={setImportText}
+                                placeholder='Paste exported JSON here…'
+                                placeholderTextColor={COLORS.textSecondary}
+                                multiline
+                                autoCapitalize="none"
+                                autoCorrect={false}
+                                accessibilityLabel="Paste backup JSON"
+                            />
+                            <TouchableOpacity
+                                style={[styles.addBtn, { padding: scaleSpacing(SPACING.sm), backgroundColor: COLORS.line2, marginTop: scaleSpacing(SPACING.sm) }]}
+                                onPress={handleImport}
+                                accessibilityRole="button"
+                                accessibilityLabel="Apply imported preferences"
+                            >
+                                <Text style={{ color: COLORS.background, fontWeight: 'bold', textAlign: 'center', fontSize: scaleFont(FONT_SIZES.md) }}>Apply Import</Text>
+                            </TouchableOpacity>
+                        </View>
+                    )}
                 </View>
             </ScrollView>
         </SafeAreaView>

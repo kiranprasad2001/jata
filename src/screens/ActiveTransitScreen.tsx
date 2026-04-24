@@ -138,8 +138,6 @@ export default function ActiveTransitScreen() {
                     distanceInterval: LOCATION_SETTINGS.TRACKING_OPTIONS.distanceInterval,
                 },
                 (location) => {
-                    console.log(`[JATA] Location update: ${location.coords.latitude}, ${location.coords.longitude}`);
-
                     setUserLocation({
                         latitude: location.coords.latitude,
                         longitude: location.coords.longitude,
