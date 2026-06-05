@@ -55,7 +55,13 @@
       ]
     ],
     "web": {
-      "favicon": "./assets/favicon.png"
+      "favicon": "./assets/favicon.png",
+      "name": "JATA · kiranic network",
+      "shortName": "JATA",
+      "lang": "en",
+      "description": "Just Another Transit App — arrivals in your pocket.",
+      "themeColor": "#297081",
+      "backgroundColor": "#292330"
     },
     "extra": {
       "eas": {
